@@ -1,5 +1,5 @@
 import express from 'express';
-import { loadConfig, isDevMode, getPort, getRoundRobin } from './config.js';
+import { loadConfig, isDevMode, getPort, getRoundRobin, getRemoveOn402 } from './config.js';
 import { logInfo, logError } from './logger.js';
 import router from './routes.js';
 import { initializeAuth } from './auth.js';
@@ -112,11 +112,13 @@ app.use((err, req, res, next) => {
     logInfo(`Dev mode: ${isDevMode()}`);
     
     const roundRobin = getRoundRobin();
+    const removeOn402 = getRemoveOn402();
     logInfo(`Round-robin algorithm: ${roundRobin}`);
+    logInfo(`Remove key on 402: ${removeOn402}`);
     
     // Initialize auth system (load and setup API key if needed)
     // This won't throw error if no auth config is found - will use client auth
-    await initializeAuth(roundRobin);
+    await initializeAuth(roundRobin, removeOn402);
     
     const PORT = getPort();
   logInfo(`Starting server on port ${PORT}...`);

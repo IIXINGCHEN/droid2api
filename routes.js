@@ -323,7 +323,7 @@ async function handleDirectResponses(req, res) {
     
     // Record request result (2xx = success)
     const isSuccess = response.status >= 200 && response.status < 300;
-    recordRequestResult(endpoint.base_url, isSuccess);
+    recordRequestResult(endpoint.base_url, isSuccess, response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -474,7 +474,7 @@ async function handleDirectMessages(req, res) {
     
     // Record request result (2xx = success)
     const isSuccess = response.status >= 200 && response.status < 300;
-    recordRequestResult(endpoint.base_url, isSuccess);
+    recordRequestResult(endpoint.base_url, isSuccess, response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -641,15 +641,76 @@ router.get('/status', (req, res) => {
             font-family: monospace;
           }
         </style>
+        <script>
+          let refreshTimer = null;
+          let refreshInterval = 30; // Default: 30 seconds
+          
+          function toggleAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            if (checkbox.checked) {
+              startAutoRefresh();
+            } else {
+              stopAutoRefresh();
+            }
+          }
+          
+          function updateRefreshInterval() {
+            const select = document.getElementById('refreshInterval');
+            refreshInterval = parseInt(select.value);
+            const checkbox = document.getElementById('autoRefresh');
+            if (checkbox.checked) {
+              stopAutoRefresh();
+              startAutoRefresh();
+            }
+          }
+          
+          function startAutoRefresh() {
+            refreshTimer = setInterval(() => {
+              location.reload();
+            }, refreshInterval * 1000);
+          }
+          
+          function stopAutoRefresh() {
+            if (refreshTimer) {
+              clearInterval(refreshTimer);
+              refreshTimer = null;
+            }
+          }
+        </script>
       </head>
       <body>
         <h1>droid2api v2.0.0 Status</h1>
         
         <div class="section">
+          <p style="text-align: center; color: #888; margin: 0;">
+            Last updated: <span id="updateTime">${new Date().toLocaleString()}</span>
+          </p>
+          <div style="text-align: center; margin-top: 10px;">
+            <label style="margin-right: 20px;">
+              <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> 
+              Auto Refresh
+            </label>
+            <label>
+              Interval: 
+              <select id="refreshInterval" onchange="updateRefreshInterval()">
+                <option value="5">5 seconds</option>
+                <option value="10">10 seconds</option>
+                <option value="30" selected>30 seconds</option>
+                <option value="60">1 minute</option>
+                <option value="300">5 minutes</option>
+                <option value="600">10 minutes</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        
+        <div class="section">
           <h2>Configuration</h2>
           <div class="info">
             <p><strong>Round-Robin Algorithm:</strong> <code>${stats.algorithm}</code></p>
-            <p><strong>Total Keys:</strong> ${stats.keys.length}</p>
+            <p><strong>Remove on 402:</strong> <code>${stats.removeOn402 ? 'Enabled' : 'Disabled'}</code></p>
+            <p><strong>Active Keys:</strong> ${stats.keys.length}</p>
+            <p><strong>Deprecated Keys:</strong> ${stats.deprecatedKeys ? stats.deprecatedKeys.length : 0}</p>
           </div>
         </div>
         
@@ -682,7 +743,7 @@ router.get('/status', (req, res) => {
         ` : ''}
         
         <div class="section">
-          <h2>API Keys Statistics</h2>
+          <h2>API Keys Statistics (Active)</h2>
           <table>
             <thead>
               <tr>
@@ -707,11 +768,35 @@ router.get('/status', (req, res) => {
           </table>
         </div>
         
+        ${stats.deprecatedKeys && stats.deprecatedKeys.length > 0 ? `
         <div class="section">
-          <p style="text-align: center; color: #888;">
-            Last updated: ${new Date().toLocaleString()}
-          </p>
+          <h2>Deprecated Keys (Removed due to 402)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Success</th>
+                <th>Fail</th>
+                <th>Total</th>
+                <th>Success Rate</th>
+                <th>Deprecated At</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stats.deprecatedKeys.map(key => `
+                <tr style="background-color: #fff3cd;">
+                  <td><code>${key.key}</code></td>
+                  <td class="success">${key.success}</td>
+                  <td class="fail">${key.fail}</td>
+                  <td>${key.total}</td>
+                  <td class="rate">${key.successRate}</td>
+                  <td>${new Date(key.deprecatedAt).toLocaleString()}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
         </div>
+        ` : ''}
       </body>
       </html>
     `;

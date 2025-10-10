@@ -255,8 +255,9 @@ function shouldRefresh() {
 /**
  * Initialize auth system - load auth config and setup initial API key if needed
  * @param {string} roundRobinAlgorithm - Key selection algorithm: 'weighted' or 'simple'
+ * @param {boolean} removeOn402 - Whether to remove keys on 402 response
  */
-export async function initializeAuth(roundRobinAlgorithm = 'weighted') {
+export async function initializeAuth(roundRobinAlgorithm = 'weighted', removeOn402 = true) {
   try {
     const authConfig = loadAuthConfig();
     
@@ -265,8 +266,8 @@ export async function initializeAuth(roundRobinAlgorithm = 'weighted') {
       const keys = authConfig.value;
       if (Array.isArray(keys) && keys.length > 0) {
         // Initialize KeyManager with loaded keys
-        initializeKeyManager(keys, roundRobinAlgorithm);
-        logInfo(`Auth system initialized with ${keys.length} API key(s), algorithm: ${roundRobinAlgorithm}`);
+        initializeKeyManager(keys, roundRobinAlgorithm, removeOn402);
+        logInfo(`Auth system initialized with ${keys.length} API key(s), algorithm: ${roundRobinAlgorithm}, removeOn402: ${removeOn402}`);
       } else {
         logError('Invalid keys configuration', new Error('Keys should be an array'));
       }
@@ -338,12 +339,13 @@ export async function getApiKey(clientAuthorization = null) {
  * Record request result for key statistics
  * @param {string} endpoint - The endpoint URL
  * @param {boolean} success - Whether the request was successful (2xx status)
+ * @param {number} statusCode - HTTP status code
  */
-export function recordRequestResult(endpoint, success) {
+export function recordRequestResult(endpoint, success, statusCode) {
   if ((authSource === 'factory_key' || authSource === 'factory_keys_file') && lastSelectedKey) {
     const keyManager = getKeyManager();
     if (keyManager) {
-      keyManager.recordResult(lastSelectedKey, endpoint, success);
+      keyManager.recordResult(lastSelectedKey, endpoint, success, statusCode);
     }
   }
 }

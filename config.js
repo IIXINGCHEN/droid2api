@@ -76,3 +76,9 @@ export function getRoundRobin() {
   }
   return roundRobin;
 }
+
+export function getRemoveOn402() {
+  const cfg = getConfig();
+  // 默认值为true
+  return cfg.remove_on_402 !== false;
+}
