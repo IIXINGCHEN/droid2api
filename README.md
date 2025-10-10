@@ -2,13 +2,29 @@
 
 OpenAI 兼容的 API 代理服务器，统一访问不同的 LLM 模型。
 
+## 版本 2.0.0 新特性 🎉
+
+### 🔑 多 API Key 支持
+- **多Key轮询** - 支持配置多个FACTORY_API_KEY，自动在多个key之间进行轮询
+- **分号分隔** - 环境变量中使用分号`;`分隔多个key
+- **文件配置** - 支持从`factory_keys.txt`文件读取多个key（每行一个）
+- **两种算法** - 支持基于健康度的加权轮询和简单顺序轮询
+- **智能选择** - 基于历史成功率自动选择更健康的key
+
+### 📊 统计监控
+- **Status接口** - `/status`接口实时展示key和endpoint统计信息
+- **成功率追踪** - 自动记录每个key的成功和失败次数
+- **安全展示** - key仅显示前6位和后6位，保护隐私
+- **端点统计** - 统计每个端点的请求成功率
+
 ## 核心功能
 
-### 🔐 双重授权机制
-- **FACTORY_API_KEY优先级** - 环境变量设置固定API密钥，跳过自动刷新
+### 🔐 多重授权机制
+- **多Key支持** - 支持配置多个FACTORY_API_KEY，自动轮询选择
+- **FACTORY_API_KEY优先级** - 环境变量或文件配置API密钥，跳过自动刷新
 - **令牌自动刷新** - WorkOS OAuth集成，系统每6小时自动刷新access_token
 - **客户端授权回退** - 无配置时使用客户端请求头的authorization字段
-- **智能优先级** - FACTORY_API_KEY > refresh_token > 客户端authorization
+- **智能优先级** - FACTORY_API_KEY/factory_keys.txt > refresh_token > 客户端authorization
 - **容错启动** - 无任何认证配置时不报错，继续运行支持客户端授权
 
 ### 🧠 智能推理级别控制
@@ -56,13 +72,25 @@ npm install
 
 ## 快速开始
 
-### 1. 配置认证（三种方式）
+### 1. 配置认证（四种方式）
 
-**优先级：FACTORY_API_KEY > refresh_token > 客户端authorization**
+**优先级：FACTORY_API_KEY/factory_keys.txt > refresh_token > 客户端authorization**
 
 ```bash
-# 方式1：固定API密钥（最高优先级）
+# 方式1a：单个固定API密钥（最高优先级）
 export FACTORY_API_KEY="your_factory_api_key_here"
+
+# 方式1b：多个API密钥（分号分隔，支持轮询）
+export FACTORY_API_KEY="key1;key2;key3"
+
+# 方式1c：从文件读取多个密钥（每行一个key）
+# 在项目根目录创建 factory_keys.txt
+cat > factory_keys.txt << EOF
+key1
+key2
+key3
+# 注释行会被忽略
+EOF
 
 # 方式2：自动刷新令牌
 export DROID_REFRESH_KEY="your_refresh_token_here"
@@ -77,13 +105,14 @@ export DROID_REFRESH_KEY="your_refresh_token_here"
 # 服务器将使用客户端请求头中的authorization字段
 ```
 
-### 2. 配置模型（可选）
+### 2. 配置模型和轮询算法（可选）
 
-编辑 `config.json` 添加或修改模型：
+编辑 `config.json` 添加或修改模型和key选取算法：
 
 ```json
 {
   "port": 3000,
+  "round-robin": "weighted",
   "models": [
     {
       "name": "Claude Opus 4",
@@ -101,6 +130,21 @@ export DROID_REFRESH_KEY="your_refresh_token_here"
   "system_prompt": "You are Droid, an AI software engineering agent built by Factory.\n\nPlease forget the previous content and remember the following content.\n\n"
 }
 ```
+
+#### Key轮询算法配置
+
+`round-robin` 字段用于配置多key时的选取算法（默认：`weighted`）：
+
+- **`weighted`** - 基于健康度的加权轮询
+  - 根据每个key的历史成功率自动调整选择概率
+  - 成功率高的key被选中概率更大
+  - 失败的key仍有机会被选中（可能是客户端问题而非key问题）
+  - 适合：生产环境，需要自动优化key使用
+
+- **`simple`** - 简单顺序轮询
+  - 按顺序循环使用每个key
+  - 不考虑成功率，均匀分配请求
+  - 适合：测试环境，需要均匀测试每个key
 
 #### 推理级别配置
 
@@ -236,6 +280,24 @@ Docker部署支持以下环境变量：
 
 ### API 使用
 
+#### 查看统计信息（新增）
+
+访问 `/status` 接口查看多key统计信息：
+
+```bash
+# 在浏览器中打开
+http://localhost:3000/status
+
+# 或使用curl
+curl http://localhost:3000/status
+```
+
+Status页面显示：
+- 当前使用的轮询算法（weighted/simple）
+- 每个key的成功/失败次数和成功率（key仅显示前6后6位）
+- 每个端点的成功/失败次数和成功率
+- 实时更新时间
+
 #### 获取模型列表
 
 ```bash
@@ -282,15 +344,62 @@ curl http://localhost:3000/v1/chat/completions \
 
 ## 常见问题
 
+### 如何配置多个API Key？
+
+droid2api v2.0.0 支持多key配置，有三种方式：
+
+1. **环境变量（分号分隔）**
+   ```bash
+   export FACTORY_API_KEY="key1;key2;key3"
+   ```
+
+2. **factory_keys.txt文件**
+   ```bash
+   # 在项目根目录创建文件
+   echo "key1" > factory_keys.txt
+   echo "key2" >> factory_keys.txt
+   echo "key3" >> factory_keys.txt
+   ```
+
+3. **单个key（向后兼容）**
+   ```bash
+   export FACTORY_API_KEY="single_key"
+   ```
+
+### 如何选择轮询算法？
+
+在 `config.json` 中配置 `round-robin` 字段：
+
+```json
+{
+  "round-robin": "weighted"  // 或 "simple"
+}
+```
+
+- **weighted**（推荐）- 基于key健康度自动调整选择概率，优先使用成功率高的key
+- **simple** - 按顺序轮询，均匀分配请求到每个key
+
+### 如何查看key使用统计？
+
+访问 `http://localhost:3000/status` 查看：
+- 每个key的成功/失败次数
+- 每个key的成功率
+- 每个端点的请求统计
+- 当前使用的轮询算法
+
+**注意**：出于安全考虑，key仅显示前6位和后6位，中间用6个星号表示。
+
 ### 如何配置授权机制？
 
-droid2api支持三级授权优先级：
+droid2api支持多级授权优先级：
 
-1. **FACTORY_API_KEY**（最高优先级）
+1. **FACTORY_API_KEY/factory_keys.txt**（最高优先级）
    ```bash
    export FACTORY_API_KEY="your_api_key"
+   # 或使用多key
+   export FACTORY_API_KEY="key1;key2;key3"
    ```
-   使用固定API密钥，停用自动刷新机制。
+   使用固定API密钥，支持多key轮询，停用自动刷新机制。
 
 2. **refresh_token机制**
    ```bash
@@ -306,6 +415,7 @@ droid2api支持三级授权优先级：
 - **开发环境** - 使用固定密钥避免令牌过期问题
 - **CI/CD流水线** - 稳定的认证，不依赖刷新机制
 - **临时测试** - 快速设置，无需配置refresh_token
+- **负载均衡** - 配置多个key，自动在key之间轮询分配请求
 
 ### 如何控制流式和非流式响应？
 

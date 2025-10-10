@@ -1,5 +1,13 @@
 # Docker 部署指南
 
+## v2.0.0 新特性
+
+### 多 API Key 支持
+- **多Key轮询** - 支持配置多个FACTORY_API_KEY，自动在key之间轮询
+- **分号分隔** - 环境变量中使用`;`分隔多个key
+- **文件配置** - 支持从`factory_keys.txt`文件读取多个key
+- **统计监控** - `/status`接口实时展示key和endpoint统计信息
+
 ## 本地 Docker 部署
 
 ### 1. 准备环境变量
@@ -13,14 +21,42 @@ cp .env.example .env
 编辑 `.env` 文件，配置认证方式（按优先级选择其一）：
 
 ```env
-# 方式1：使用固定API密钥（推荐生产环境）
+# 方式1a：使用单个固定API密钥（推荐生产环境）
 FACTORY_API_KEY=your_factory_api_key_here
+
+# 方式1b：使用多个API密钥（分号分隔，支持轮询）
+FACTORY_API_KEY=key1;key2;key3
+
+# 方式1c：使用factory_keys.txt文件（在docker-compose.yml中挂载）
+# 创建 factory_keys.txt，每行一个key
 
 # 方式2：使用refresh token自动刷新
 DROID_REFRESH_KEY=your_actual_refresh_token_here
 ```
 
-**优先级：FACTORY_API_KEY > DROID_REFRESH_KEY > 客户端authorization**
+**优先级：FACTORY_API_KEY/factory_keys.txt > DROID_REFRESH_KEY > 客户端authorization**
+
+### 1.1 使用factory_keys.txt文件（可选）
+
+如果使用文件配置多个key，在项目根目录创建 `factory_keys.txt`：
+
+```bash
+cat > factory_keys.txt << EOF
+key1
+key2
+key3
+# 注释行会被忽略
+EOF
+```
+
+然后在 `docker-compose.yml` 中添加volume映射：
+
+```yaml
+services:
+  droid2api:
+    volumes:
+      - ./factory_keys.txt:/app/factory_keys.txt:ro
+```
 
 ### 2. 使用 Docker Compose 启动
 
@@ -51,11 +87,25 @@ docker build -t droid2api:latest .
 **运行容器：**
 
 ```bash
-# 方式1：使用固定API密钥
+# 方式1a：使用单个固定API密钥
 docker run -d \
   --name droid2api \
   -p 3000:3000 \
   -e FACTORY_API_KEY="your_factory_api_key_here" \
+  droid2api:latest
+
+# 方式1b：使用多个API密钥（分号分隔）
+docker run -d \
+  --name droid2api \
+  -p 3000:3000 \
+  -e FACTORY_API_KEY="key1;key2;key3" \
+  droid2api:latest
+
+# 方式1c：使用factory_keys.txt文件
+docker run -d \
+  --name droid2api \
+  -p 3000:3000 \
+  -v $(pwd)/factory_keys.txt:/app/factory_keys.txt:ro \
   droid2api:latest
 
 # 方式2：使用refresh token
@@ -87,12 +137,13 @@ docker rm droid2api
 2. 连接你的 GitHub 仓库
 3. 配置：
    - **Environment**: Docker
-   - **Branch**: docker-deploy
+   - **Branch**: multi-key-support
    - **Port**: 3000
 4. 添加环境变量（选择其一）：
-   - `FACTORY_API_KEY`: 固定API密钥（推荐）
+   - `FACTORY_API_KEY`: 单个或多个API密钥（分号分隔）
    - `DROID_REFRESH_KEY`: refresh token
 5. 点击 "Create Web Service"
+6. 访问 `https://your-app.onrender.com/status` 查看统计信息
 
 ### Railway 部署
 
@@ -219,19 +270,47 @@ docker run -d \
 容器启动后，可以通过以下端点检查服务状态：
 
 ```bash
+# 基本信息
 curl http://localhost:3000/
+
+# 模型列表
 curl http://localhost:3000/v1/models
+
+# 统计信息（新增）
+curl http://localhost:3000/status
+# 或在浏览器中打开 http://localhost:3000/status
 ```
 
 ## 环境变量说明
 
 | 变量名 | 必需 | 优先级 | 说明 |
 |--------|------|--------|------|
-| `FACTORY_API_KEY` | 否 | 最高 | 固定API密钥，跳过自动刷新（推荐生产环境） |
+| `FACTORY_API_KEY` | 否 | 最高 | API密钥，支持单个或多个（分号分隔）。推荐生产环境使用 |
 | `DROID_REFRESH_KEY` | 否 | 次高 | Factory refresh token，用于自动刷新 API key |
 | `NODE_ENV` | 否 | - | 运行环境，默认 production |
 
-**注意**：`FACTORY_API_KEY` 和 `DROID_REFRESH_KEY` 至少配置一个
+**注意**：
+- `FACTORY_API_KEY` 和 `DROID_REFRESH_KEY` 至少配置一个
+- `FACTORY_API_KEY` 支持多个key（使用`;`分隔）：`key1;key2;key3`
+- 或者使用 `factory_keys.txt` 文件（需要挂载到容器）
+
+## 配置文件说明
+
+### config.json
+
+编辑 `config.json` 配置key选取算法：
+
+```json
+{
+  "port": 3000,
+  "round-robin": "weighted",  // 或 "simple"
+  ...
+}
+```
+
+**round-robin 算法：**
+- `weighted` - 基于key健康度的加权轮询（默认，推荐）
+- `simple` - 简单顺序轮询
 
 ## 故障排查
 

@@ -7,7 +7,8 @@ import { transformToOpenAI, getOpenAIHeaders } from './transformers/request-open
 import { transformToCommon, getCommonHeaders } from './transformers/request-common.js';
 import { AnthropicResponseTransformer } from './transformers/response-anthropic.js';
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
-import { getApiKey } from './auth.js';
+import { getApiKey, recordRequestResult } from './auth.js';
+import { getKeyManager } from './key-manager.js';
 
 const router = express.Router();
 
@@ -148,6 +149,10 @@ async function handleChatCompletions(req, res) {
     });
 
     logInfo(`Response status: ${response.status}`);
+    
+    // Record request result (2xx = success)
+    const isSuccess = response.status >= 200 && response.status < 300;
+    recordRequestResult(endpoint.base_url, isSuccess);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -315,6 +320,10 @@ async function handleDirectResponses(req, res) {
     });
 
     logInfo(`Response status: ${response.status}`);
+    
+    // Record request result (2xx = success)
+    const isSuccess = response.status >= 200 && response.status < 300;
+    recordRequestResult(endpoint.base_url, isSuccess);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -462,6 +471,10 @@ async function handleDirectMessages(req, res) {
     });
 
     logInfo(`Response status: ${response.status}`);
+    
+    // Record request result (2xx = success)
+    const isSuccess = response.status >= 200 && response.status < 300;
+    recordRequestResult(endpoint.base_url, isSuccess);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -504,6 +517,216 @@ async function handleDirectMessages(req, res) {
     });
   }
 }
+
+// Status接口 - 展示统计信息
+router.get('/status', (req, res) => {
+  logInfo('GET /status');
+  
+  try {
+    const keyManager = getKeyManager();
+    
+    if (!keyManager) {
+      // 如果没有使用KeyManager（例如使用refresh token或client auth）
+      return res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <title>droid2api Status</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              max-width: 1200px;
+              margin: 50px auto;
+              padding: 20px;
+              background-color: #f5f5f5;
+            }
+            h1 {
+              color: #333;
+              text-align: center;
+            }
+            .info {
+              background: white;
+              padding: 20px;
+              border-radius: 8px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+              text-align: center;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>droid2api v2.0.0 Status</h1>
+          <div class="info">
+            <p>Multi-key statistics are not available.</p>
+            <p>This feature is only enabled when using FACTORY_API_KEY or factory_keys.txt with multiple keys.</p>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+    
+    const stats = keyManager.getStats();
+    
+    // 生成HTML页面
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>droid2api Status</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+          }
+          h1 {
+            color: #333;
+            text-align: center;
+          }
+          .section {
+            background: white;
+            margin: 20px 0;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          }
+          h2 {
+            color: #555;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+          }
+          .info {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9f9f9;
+            border-left: 4px solid #2196F3;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+          }
+          th {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px;
+            text-align: left;
+          }
+          td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+          }
+          tr:hover {
+            background-color: #f5f5f5;
+          }
+          .success {
+            color: #4CAF50;
+            font-weight: bold;
+          }
+          .fail {
+            color: #f44336;
+            font-weight: bold;
+          }
+          .rate {
+            font-weight: bold;
+            color: #2196F3;
+          }
+          code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>droid2api v2.0.0 Status</h1>
+        
+        <div class="section">
+          <h2>Configuration</h2>
+          <div class="info">
+            <p><strong>Round-Robin Algorithm:</strong> <code>${stats.algorithm}</code></p>
+            <p><strong>Total Keys:</strong> ${stats.keys.length}</p>
+          </div>
+        </div>
+        
+        <div class="section">
+          <h2>API Keys Statistics</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Success</th>
+                <th>Fail</th>
+                <th>Total</th>
+                <th>Success Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stats.keys.map(key => `
+                <tr>
+                  <td><code>${key.key}</code></td>
+                  <td class="success">${key.success}</td>
+                  <td class="fail">${key.fail}</td>
+                  <td>${key.total}</td>
+                  <td class="rate">${key.successRate}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        
+        ${stats.endpoints.length > 0 ? `
+        <div class="section">
+          <h2>Endpoint Statistics</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Endpoint</th>
+                <th>Success</th>
+                <th>Fail</th>
+                <th>Total</th>
+                <th>Success Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stats.endpoints.map(ep => `
+                <tr>
+                  <td><code>${ep.endpoint}</code></td>
+                  <td class="success">${ep.success}</td>
+                  <td class="fail">${ep.fail}</td>
+                  <td>${ep.total}</td>
+                  <td class="rate">${ep.successRate}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        ` : ''}
+        
+        <div class="section">
+          <p style="text-align: center; color: #888;">
+            Last updated: ${new Date().toLocaleString()}
+          </p>
+        </div>
+      </body>
+      </html>
+    `;
+    
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+    
+  } catch (error) {
+    logError('Error in GET /status', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error.message 
+    });
+  }
+});
 
 // 注册路由
 router.post('/v1/chat/completions', handleChatCompletions);

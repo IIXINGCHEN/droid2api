@@ -1,5 +1,5 @@
 import express from 'express';
-import { loadConfig, isDevMode, getPort } from './config.js';
+import { loadConfig, isDevMode, getPort, getRoundRobin } from './config.js';
 import { logInfo, logError } from './logger.js';
 import router from './routes.js';
 import { initializeAuth } from './auth.js';
@@ -25,13 +25,14 @@ app.use(router);
 app.get('/', (req, res) => {
   res.json({
     name: 'droid2api',
-    version: '1.0.0',
+    version: '2.0.0',
     description: 'OpenAI Compatible API Proxy',
     endpoints: [
       'GET /v1/models',
       'POST /v1/chat/completions',
       'POST /v1/responses',
-      'POST /v1/messages'
+      'POST /v1/messages',
+      'GET /status'
     ]
   });
 });
@@ -110,9 +111,12 @@ app.use((err, req, res, next) => {
     logInfo('Configuration loaded successfully');
     logInfo(`Dev mode: ${isDevMode()}`);
     
+    const roundRobin = getRoundRobin();
+    logInfo(`Round-robin algorithm: ${roundRobin}`);
+    
     // Initialize auth system (load and setup API key if needed)
     // This won't throw error if no auth config is found - will use client auth
-    await initializeAuth();
+    await initializeAuth(roundRobin);
     
     const PORT = getPort();
   logInfo(`Starting server on port ${PORT}...`);

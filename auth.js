@@ -3,15 +3,17 @@ import path from 'path';
 import os from 'os';
 import fetch from 'node-fetch';
 import { logDebug, logError, logInfo } from './logger.js';
+import { initializeKeyManager, getKeyManager } from './key-manager.js';
 
 // State management for API key and refresh
 let currentApiKey = null;
 let currentRefreshToken = null;
 let lastRefreshTime = null;
 let clientId = null;
-let authSource = null; // 'env' or 'file' or 'factory_key' or 'client'
+let authSource = null; // 'env' or 'file' or 'factory_key' or 'factory_keys_file' or 'client'
 let authFilePath = null;
-let factoryApiKey = null; // From FACTORY_API_KEY environment variable
+let factoryApiKey = null; // From FACTORY_API_KEY environment variable (deprecated for multi-key)
+let lastSelectedKey = null; // Track last selected key for result recording
 
 const REFRESH_URL = 'https://api.workos.com/user_management/authenticate';
 const REFRESH_INTERVAL_HOURS = 6; // Refresh every 6 hours
@@ -59,19 +61,44 @@ function generateClientId() {
 
 /**
  * Load auth configuration with priority system
- * Priority: FACTORY_API_KEY > refresh token mechanism > client authorization
+ * Priority: FACTORY_API_KEY > factory_keys.txt > refresh token mechanism > client authorization
  */
 function loadAuthConfig() {
   // 1. Check FACTORY_API_KEY environment variable (highest priority)
   const factoryKey = process.env.FACTORY_API_KEY;
   if (factoryKey && factoryKey.trim() !== '') {
-    logInfo('Using fixed API key from FACTORY_API_KEY environment variable');
-    factoryApiKey = factoryKey.trim();
-    authSource = 'factory_key';
-    return { type: 'factory_key', value: factoryKey.trim() };
+    // 支持分号分隔多个key
+    const keys = factoryKey.split(';')
+      .map(k => k.trim())
+      .filter(k => k !== '');
+    
+    if (keys.length > 0) {
+      logInfo(`Using API key(s) from FACTORY_API_KEY environment variable: ${keys.length} key(s)`);
+      authSource = 'factory_key';
+      return { type: 'factory_key', value: keys };
+    }
   }
 
-  // 2. Check refresh token mechanism (DROID_REFRESH_KEY)
+  // 2. Check factory_keys.txt file in project directory
+  const keysFilePath = path.join(process.cwd(), 'factory_keys.txt');
+  try {
+    if (fs.existsSync(keysFilePath)) {
+      const keysContent = fs.readFileSync(keysFilePath, 'utf-8');
+      const keys = keysContent.split('\n')
+        .map(k => k.trim())
+        .filter(k => k !== '' && !k.startsWith('#')); // 过滤空行和注释行
+      
+      if (keys.length > 0) {
+        logInfo(`Using API key(s) from factory_keys.txt: ${keys.length} key(s)`);
+        authSource = 'factory_keys_file';
+        return { type: 'factory_key', value: keys };
+      }
+    }
+  } catch (error) {
+    logError('Error reading factory_keys.txt', error);
+  }
+
+  // 3. Check refresh token mechanism (DROID_REFRESH_KEY)
   const envRefreshKey = process.env.DROID_REFRESH_KEY;
   if (envRefreshKey && envRefreshKey.trim() !== '') {
     logInfo('Using refresh token from DROID_REFRESH_KEY environment variable');
@@ -80,7 +107,7 @@ function loadAuthConfig() {
     return { type: 'refresh', value: envRefreshKey.trim() };
   }
 
-  // 3. Check ~/.factory/auth.json
+  // 4. Check ~/.factory/auth.json
   const homeDir = os.homedir();
   const factoryAuthPath = path.join(homeDir, '.factory', 'auth.json');
   
@@ -106,7 +133,7 @@ function loadAuthConfig() {
     logError('Error reading ~/.factory/auth.json', error);
   }
 
-  // 4. No configured auth found - will use client authorization
+  // 5. No configured auth found - will use client authorization
   logInfo('No auth configuration found, will use client authorization headers');
   authSource = 'client';
   return { type: 'client', value: null };
@@ -227,14 +254,22 @@ function shouldRefresh() {
 
 /**
  * Initialize auth system - load auth config and setup initial API key if needed
+ * @param {string} roundRobinAlgorithm - Key selection algorithm: 'weighted' or 'simple'
  */
-export async function initializeAuth() {
+export async function initializeAuth(roundRobinAlgorithm = 'weighted') {
   try {
     const authConfig = loadAuthConfig();
     
     if (authConfig.type === 'factory_key') {
-      // Using fixed FACTORY_API_KEY, no refresh needed
-      logInfo('Auth system initialized with fixed API key');
+      // Using FACTORY_API_KEY or factory_keys.txt
+      const keys = authConfig.value;
+      if (Array.isArray(keys) && keys.length > 0) {
+        // Initialize KeyManager with loaded keys
+        initializeKeyManager(keys, roundRobinAlgorithm);
+        logInfo(`Auth system initialized with ${keys.length} API key(s), algorithm: ${roundRobinAlgorithm}`);
+      } else {
+        logError('Invalid keys configuration', new Error('Keys should be an array'));
+      }
     } else if (authConfig.type === 'refresh') {
       // Using refresh token mechanism
       currentRefreshToken = authConfig.value;
@@ -259,9 +294,19 @@ export async function initializeAuth() {
  * @param {string} clientAuthorization - Authorization header from client request (optional)
  */
 export async function getApiKey(clientAuthorization = null) {
-  // Priority 1: FACTORY_API_KEY environment variable
-  if (authSource === 'factory_key' && factoryApiKey) {
-    return `Bearer ${factoryApiKey}`;
+  // Priority 1: FACTORY_API_KEY or factory_keys.txt (using KeyManager)
+  if (authSource === 'factory_key' || authSource === 'factory_keys_file') {
+    const keyManager = getKeyManager();
+    if (keyManager) {
+      const selectedKey = keyManager.selectKey();
+      lastSelectedKey = selectedKey; // Track for result recording
+      return `Bearer ${selectedKey}`;
+    }
+    // Fallback for single key (backward compatibility)
+    if (factoryApiKey) {
+      lastSelectedKey = factoryApiKey;
+      return `Bearer ${factoryApiKey}`;
+    }
   }
   
   // Priority 2: Refresh token mechanism
@@ -287,4 +332,18 @@ export async function getApiKey(clientAuthorization = null) {
   
   // No authorization available
   throw new Error('No authorization available. Please configure FACTORY_API_KEY, refresh token, or provide client authorization.');
+}
+
+/**
+ * Record request result for key statistics
+ * @param {string} endpoint - The endpoint URL
+ * @param {boolean} success - Whether the request was successful (2xx status)
+ */
+export function recordRequestResult(endpoint, success) {
+  if ((authSource === 'factory_key' || authSource === 'factory_keys_file') && lastSelectedKey) {
+    const keyManager = getKeyManager();
+    if (keyManager) {
+      keyManager.recordResult(lastSelectedKey, endpoint, success);
+    }
+  }
 }
