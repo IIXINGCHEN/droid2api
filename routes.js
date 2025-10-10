@@ -645,8 +645,32 @@ router.get('/status', (req, res) => {
           let refreshTimer = null;
           let refreshInterval = 30; // Default: 30 seconds
           
+          // 页面加载时恢复之前的设置
+          window.addEventListener('DOMContentLoaded', function() {
+            // 读取保存的设置
+            const savedAutoRefresh = localStorage.getItem('autoRefresh');
+            const savedInterval = localStorage.getItem('refreshInterval');
+            
+            // 恢复刷新间隔选择
+            if (savedInterval) {
+              refreshInterval = parseInt(savedInterval);
+              const select = document.getElementById('refreshInterval');
+              select.value = savedInterval;
+            }
+            
+            // 恢复自动刷新开关
+            if (savedAutoRefresh === 'true') {
+              const checkbox = document.getElementById('autoRefresh');
+              checkbox.checked = true;
+              startAutoRefresh();
+            }
+          });
+          
           function toggleAutoRefresh() {
             const checkbox = document.getElementById('autoRefresh');
+            // 保存开关状态
+            localStorage.setItem('autoRefresh', checkbox.checked);
+            
             if (checkbox.checked) {
               startAutoRefresh();
             } else {
@@ -657,6 +681,9 @@ router.get('/status', (req, res) => {
           function updateRefreshInterval() {
             const select = document.getElementById('refreshInterval');
             refreshInterval = parseInt(select.value);
+            // 保存刷新间隔
+            localStorage.setItem('refreshInterval', select.value);
+            
             const checkbox = document.getElementById('autoRefresh');
             if (checkbox.checked) {
               stopAutoRefresh();
