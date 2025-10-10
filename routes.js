@@ -1,5 +1,7 @@
 import express from 'express';
 import fetch from 'node-fetch';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getModelReasoning } from './config.js';
 import { logInfo, logDebug, logError, logRequest, logResponse } from './logger.js';
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
@@ -10,6 +12,23 @@ import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { getApiKey } from './auth.js';
 
 const router = express.Router();
+
+// 全局代理配置
+const proxyUrl = process.env.PROXY_URL;
+let proxyAgent = null;
+if (proxyUrl) {
+  try {
+    if (proxyUrl.startsWith('socks4://') || proxyUrl.startsWith('socks5://') || proxyUrl.startsWith('socks://')) {
+      proxyAgent = new SocksProxyAgent(proxyUrl);
+      logInfo(`使用 SOCKS 代理: ${proxyUrl}`);
+    } else {
+      proxyAgent = new HttpsProxyAgent(proxyUrl);
+      logInfo(`使用 HTTP(S) 代理: ${proxyUrl}`);
+    }
+  } catch (error) {
+    logError('代理配置失败', error);
+  }
+}
 
 /**
  * Convert a /v1/responses API result to a /v1/chat/completions-compatible format.
@@ -141,11 +160,16 @@ async function handleChatCompletions(req, res) {
 
     logRequest('POST', endpoint.base_url, headers, transformedRequest);
 
-    const response = await fetch(endpoint.base_url, {
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(transformedRequest)
-    });
+    };
+    if (proxyAgent) {
+      fetchOptions.agent = proxyAgent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 
@@ -308,20 +332,25 @@ async function handleDirectResponses(req, res) {
     logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
     // 转发修改后的请求
-    const response = await fetch(endpoint.base_url, {
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
-    });
+    };
+    if (proxyAgent) {
+      fetchOptions.agent = proxyAgent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 
     if (!response.ok) {
       const errorText = await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Endpoint returned ${response.status}`,
-        details: errorText 
+        details: errorText
       });
     }
 
@@ -455,20 +484,25 @@ async function handleDirectMessages(req, res) {
     logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
     // 转发修改后的请求
-    const response = await fetch(endpoint.base_url, {
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
-    });
+    };
+    if (proxyAgent) {
+      fetchOptions.agent = proxyAgent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 
     if (!response.ok) {
       const errorText = await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Endpoint returned ${response.status}`,
-        details: errorText 
+        details: errorText
       });
     }
 
