@@ -8,6 +8,11 @@
 - **文件配置** - 支持从`factory_keys.txt`文件读取多个key
 - **统计监控** - `/status`接口实时展示key和endpoint统计信息
 
+### 自动Key管理
+- **402自动废弃** - 响应402状态码时自动废弃对应的key
+- **故障隔离** - 自动隔离失效key，保持系统稳定
+- **可配置** - 通过`remove_on_402`配置开关（默认开启）
+
 ## 本地 Docker 部署
 
 ### 1. 准备环境变量
@@ -281,6 +286,13 @@ curl http://localhost:3000/status
 # 或在浏览器中打开 http://localhost:3000/status
 ```
 
+**Status页面功能：**
+- 实时更新时间和自动刷新功能
+- 当前配置（算法、402废弃开关、key数量）
+- 端点请求统计
+- 活跃key统计
+- 废弃key列表（显示被402自动废弃的key）
+
 ## 环境变量说明
 
 | 变量名 | 必需 | 优先级 | 说明 |
@@ -298,12 +310,13 @@ curl http://localhost:3000/status
 
 ### config.json
 
-编辑 `config.json` 配置key选取算法：
+编辑 `config.json` 配置key选取算法和自动废弃功能：
 
 ```json
 {
   "port": 3000,
-  "round-robin": "weighted",  // 或 "simple"
+  "round-robin": "weighted",    // 或 "simple"
+  "remove_on_402": true,         // 是否在402时自动废弃key
   ...
 }
 ```
@@ -311,6 +324,13 @@ curl http://localhost:3000/status
 **round-robin 算法：**
 - `weighted` - 基于key健康度的加权轮询（默认，推荐）
 - `simple` - 简单顺序轮询
+
+**remove_on_402 配置：**
+- `true` - 自动废弃返回402的key（默认，推荐）
+  - 适合生产环境，自动处理失效key
+  - key配额耗尽或失效时自动隔离
+- `false` - 不自动废弃，继续使用所有key
+  - 适合测试环境或需要手动管理key
 
 ## 故障排查
 
@@ -335,6 +355,21 @@ docker logs droid2api
 2. 如果使用 `DROID_REFRESH_KEY`：获取新的 refresh token
 3. 更新环境变量
 4. 重启容器
+
+### API 请求返回 402
+
+**原因**：Key配额耗尽或key失效
+
+**自动处理**（当 `remove_on_402: true`）：
+- 系统自动标记该key为废弃
+- 该key不再参与后续轮询
+- 其他正常key继续工作
+- 在`/status`页面查看废弃key列表
+
+**手动处理**：
+1. 检查key配额状态
+2. 更换新的有效key
+3. 重启容器加载新配置
 
 ### 容器频繁重启
 
