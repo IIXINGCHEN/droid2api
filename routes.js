@@ -653,32 +653,6 @@ router.get('/status', (req, res) => {
           </div>
         </div>
         
-        <div class="section">
-          <h2>API Keys Statistics</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Success</th>
-                <th>Fail</th>
-                <th>Total</th>
-                <th>Success Rate</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${stats.keys.map(key => `
-                <tr>
-                  <td><code>${key.key}</code></td>
-                  <td class="success">${key.success}</td>
-                  <td class="fail">${key.fail}</td>
-                  <td>${key.total}</td>
-                  <td class="rate">${key.successRate}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        
         ${stats.endpoints.length > 0 ? `
         <div class="section">
           <h2>Endpoint Statistics</h2>
@@ -706,6 +680,32 @@ router.get('/status', (req, res) => {
           </table>
         </div>
         ` : ''}
+        
+        <div class="section">
+          <h2>API Keys Statistics</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Success</th>
+                <th>Fail</th>
+                <th>Total</th>
+                <th>Success Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${stats.keys.map(key => `
+                <tr>
+                  <td><code>${key.key}</code></td>
+                  <td class="success">${key.success}</td>
+                  <td class="fail">${key.fail}</td>
+                  <td>${key.total}</td>
+                  <td class="rate">${key.successRate}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
         
         <div class="section">
           <p style="text-align: center; color: #888;">
