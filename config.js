@@ -36,8 +36,7 @@ export function getEndpointByType(type) {
 }
 
 export function isDevMode() {
-  const cfg = getConfig();
-  return cfg.dev_mode === true;
+  return process.env.NODE_ENV === 'development';
 }
 
 export function getPort() {

@@ -11,6 +11,16 @@ OpenAI 兼容的 API 代理服务器，统一访问不同的 LLM 模型。
 - **智能优先级** - FACTORY_API_KEY > refresh_token > 客户端authorization
 - **容错启动** - 无任何认证配置时不报错，继续运行支持客户端授权
 
+### 🎯 密钥池管理系统（无限量密钥支持）
+- **大规模密钥轮询** - 支持无数量限制的 FACTORY_API_KEY 池化管理
+- **智能轮询算法** - 支持 round-robin、random、least-used、weighted-score 四种算法
+- **自动健康检查** - 批量测试密钥可用性，自动标记失效密钥
+- **自动封禁机制** - 测试返回200标记成功，402错误自动封禁，其他错误自动禁用
+- **Web管理界面** - 可视化管理所有密钥，支持添加/删除/测试/导出
+- **密钥状态管理** - active（可用）/disabled（禁用）/banned（封禁）三态管理
+- **批量操作** - 批量导入、批量测试、批量删除禁用/封禁密钥
+- **数据持久化** - 密钥池状态自动保存到 `key_pool.json`，带备份和原子写入
+
 ### 🧠 智能推理级别控制
 - **五档推理级别** - auto/off/low/medium/high，灵活控制推理行为
 - **auto模式** - 完全遵循客户端原始请求，不做任何推理参数修改
@@ -33,12 +43,48 @@ OpenAI 兼容的 API 代理服务器，统一访问不同的 LLM 模型。
 - **请求头标准化** - 自动添加Factory特定的认证和会话头信息
 - **零配置使用** - Claude Code可直接使用，无需额外设置
 
+## 管理后台
+
+### 访问管理界面
+
+启动服务后，访问 `http://localhost:3000/` 进入 Web 管理界面。
+
+**主要功能**：
+- 📊 **密钥池统计** - 查看总数、可用、禁用、封禁密钥数量
+- ➕ **添加密钥** - 单个添加或批量导入密钥
+- 🧪 **测试密钥** - 单个测试或批量测试所有密钥可用性
+- 📤 **导出密钥** - 按状态筛选导出为 txt 文件
+- 🗑️ **删除密钥** - 单个删除或批量删除禁用/封禁密钥
+- ⚙️ **配置管理** - 调整轮询算法、重试机制、性能参数
+
+### 管理 API 端点
+
+所有管理接口需要在请求头中添加 `x-admin-key` 认证：
+
+```bash
+curl -H "x-admin-key: your-admin-key" http://localhost:3000/admin/stats
+```
+
+**核心接口**：
+- `GET /admin/stats` - 密钥池统计信息
+- `GET /admin/keys` - 密钥列表（支持分页和状态筛选）
+- `POST /admin/keys` - 添加单个密钥
+- `POST /admin/keys/batch` - 批量导入密钥
+- `DELETE /admin/keys/:id` - 删除密钥
+- `PATCH /admin/keys/:id/toggle` - 切换密钥状态
+- `POST /admin/keys/:id/test` - 测试单个密钥
+- `POST /admin/keys/test-all` - 批量测试所有密钥
+- `GET /admin/keys/export` - 导出密钥为txt文件
+- `GET /admin/config` - 获取轮询配置
+- `PUT /admin/config` - 更新轮询配置
+
 ## 其他特性
 
 - 🎯 **标准 OpenAI API 接口** - 使用熟悉的 OpenAI API 格式访问所有模型
 - 🔄 **自动格式转换** - 自动处理不同 LLM 提供商的格式差异
 - 🌊 **智能流式处理** - 完全尊重客户端stream参数，支持流式和非流式响应
 - ⚙️ **灵活配置** - 通过配置文件自定义模型和端点
+- 📝 **智能日志系统** - 开发模式详细控制台日志，生产模式文件日志（按天轮换）
 
 ## 安装
 
@@ -77,7 +123,29 @@ export DROID_REFRESH_KEY="your_refresh_token_here"
 # 服务器将使用客户端请求头中的authorization字段
 ```
 
-### 2. 配置模型（可选）
+### 2. 配置环境变量
+
+创建 `.env` 文件配置以下变量：
+
+```env
+# ===== API 认证配置（三选一） =====
+FACTORY_API_KEY=your_factory_api_key_here        # 方式1：固定密钥（推荐）
+DROID_REFRESH_KEY=your_refresh_token_here        # 方式2：自动刷新令牌
+
+# ===== 管理后台配置（必需） =====
+ADMIN_ACCESS_KEY=your-secure-admin-password      # 管理后台访问密钥（强烈推荐设置）
+
+# ===== 服务配置（可选） =====
+PORT=3000                                        # 服务端口（默认3000）
+NODE_ENV=production                              # 运行环境（development/production）
+```
+
+**重要说明**：
+- `ADMIN_ACCESS_KEY` 用于保护管理后台 `/admin/*` 接口，请设置强密码
+- `NODE_ENV=development` 启用详细日志但不写入文件（开发模式）
+- `NODE_ENV=production` 启用文件日志到 `logs/` 目录（生产模式）
+
+### 3. 配置模型（可选）
 
 编辑 `config.json` 添加或修改模型：
 
