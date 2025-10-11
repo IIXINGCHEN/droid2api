@@ -1,5 +1,6 @@
 import { logDebug } from '../logger.js';
 import { getSystemPrompt, getModelReasoning, getUserAgent } from '../config.js';
+import { generateUUID } from '../utils/uuid.js';
 
 export function transformToOpenAI(openaiRequest) {
   logDebug('Transforming OpenAI request to target OpenAI format');
@@ -166,12 +167,4 @@ export function getOpenAIHeaders(authHeader, clientHeaders = {}) {
   });
 
   return headers;
-}
-
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c == 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
 }

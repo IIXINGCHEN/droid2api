@@ -10,17 +10,29 @@
 cp .env.example .env
 ```
 
-编辑 `.env` 文件，配置认证方式（按优先级选择其一）：
+编辑 `.env` 文件，配置认证方式和管理后台：
 
 ```env
+# ===== API 认证配置（三选一） =====
 # 方式1：使用固定API密钥（推荐生产环境）
 FACTORY_API_KEY=your_factory_api_key_here
 
 # 方式2：使用refresh token自动刷新
 DROID_REFRESH_KEY=your_actual_refresh_token_here
+
+# ===== 管理后台配置（强烈推荐） =====
+ADMIN_ACCESS_KEY=your-secure-admin-password
+
+# ===== 服务配置（可选） =====
+PORT=3000
+NODE_ENV=production
 ```
 
 **优先级：FACTORY_API_KEY > DROID_REFRESH_KEY > 客户端authorization**
+
+**重要提示**：
+- `ADMIN_ACCESS_KEY` 用于保护管理后台，请设置强密码
+- `NODE_ENV=production` 启用文件日志到 `logs/` 目录
 
 ### 2. 使用 Docker Compose 启动
 
@@ -176,7 +188,9 @@ docker rm droid2api
 
 ## 持久化配置
 
-如果需要持久化刷新的 tokens：
+### 密钥池数据持久化
+
+密钥池数据存储在 `key_pool.json`，容器重启会丢失。**生产环境强烈推荐挂载数据卷**。
 
 ### Docker Compose 方式
 
@@ -186,23 +200,30 @@ docker rm droid2api
 services:
   droid2api:
     volumes:
-      - auth-data:/app
-      
+      - key-pool-data:/app/key_pool.json      # 密钥池数据
+      - logs-data:/app/logs                    # 日志目录
+
 volumes:
-  auth-data:
+  key-pool-data:
+  logs-data:
 ```
 
 ### Docker 命令方式
 
 ```bash
-docker volume create droid2api-data
+# 创建数据卷
+docker volume create droid2api-keypool
+docker volume create droid2api-logs
 
 # 使用固定API密钥
 docker run -d \
   --name droid2api \
   -p 3000:3000 \
   -e FACTORY_API_KEY="your_factory_api_key_here" \
-  -v droid2api-data:/app \
+  -e ADMIN_ACCESS_KEY="your-admin-password" \
+  -e NODE_ENV="production" \
+  -v droid2api-keypool:/app/key_pool.json \
+  -v droid2api-logs:/app/logs \
   droid2api:latest
 
 # 或使用refresh token
@@ -210,7 +231,10 @@ docker run -d \
   --name droid2api \
   -p 3000:3000 \
   -e DROID_REFRESH_KEY="your_refresh_token_here" \
-  -v droid2api-data:/app \
+  -e ADMIN_ACCESS_KEY="your-admin-password" \
+  -e NODE_ENV="production" \
+  -v droid2api-keypool:/app/key_pool.json \
+  -v droid2api-logs:/app/logs \
   droid2api:latest
 ```
 
@@ -219,8 +243,42 @@ docker run -d \
 容器启动后，可以通过以下端点检查服务状态：
 
 ```bash
+# 检查服务基本状态
 curl http://localhost:3000/
+
+# 获取可用模型列表
 curl http://localhost:3000/v1/models
+
+# 检查管理后台（需要ADMIN_ACCESS_KEY）
+curl -H "x-admin-key: your-admin-key" http://localhost:3000/admin/stats
+```
+
+## 管理后台访问
+
+### Web界面
+
+浏览器访问 `http://localhost:3000/` 或 `http://your-domain.com/`
+
+**功能列表**：
+- 密钥池统计信息
+- 添加/删除/测试密钥
+- 批量导入密钥
+- 导出密钥列表
+- 配置轮询算法
+
+### API接口
+
+所有管理接口需要在请求头中添加 `x-admin-key`：
+
+```bash
+# 获取密钥池统计
+curl -H "x-admin-key: your-admin-key" http://localhost:3000/admin/stats
+
+# 批量测试所有密钥
+curl -X POST -H "x-admin-key: your-admin-key" http://localhost:3000/admin/keys/test-all
+
+# 导出所有active状态的密钥
+curl -H "x-admin-key: your-admin-key" "http://localhost:3000/admin/keys/export?status=active"
 ```
 
 ## 环境变量说明
@@ -229,9 +287,14 @@ curl http://localhost:3000/v1/models
 |--------|------|--------|------|
 | `FACTORY_API_KEY` | 否 | 最高 | 固定API密钥，跳过自动刷新（推荐生产环境） |
 | `DROID_REFRESH_KEY` | 否 | 次高 | Factory refresh token，用于自动刷新 API key |
-| `NODE_ENV` | 否 | - | 运行环境，默认 production |
+| `ADMIN_ACCESS_KEY` | 强烈推荐 | - | 管理后台访问密钥，保护 `/admin/*` 接口 |
+| `NODE_ENV` | 否 | - | 运行环境（development/production），默认 production |
+| `PORT` | 否 | - | 服务端口，默认 3000 |
 
-**注意**：`FACTORY_API_KEY` 和 `DROID_REFRESH_KEY` 至少配置一个
+**重要提示**：
+- `FACTORY_API_KEY` 和 `DROID_REFRESH_KEY` 至少配置一个
+- **必须配置 `ADMIN_ACCESS_KEY`** 以保护管理后台安全
+- `NODE_ENV=production` 时日志写入 `logs/` 目录，按天轮换
 
 ## 故障排查
 
@@ -246,6 +309,7 @@ docker logs droid2api
 - 缺少认证配置（`FACTORY_API_KEY` 或 `DROID_REFRESH_KEY`）
 - API密钥或refresh token 无效或过期
 - 端口 3000 已被占用
+- `ADMIN_ACCESS_KEY` 未设置或使用默认值（需要更改）
 
 ### API 请求返回 401
 
@@ -269,9 +333,12 @@ docker logs droid2api
 1. **不要将 `.env` 文件提交到 Git**
 2. **使用 secrets 管理敏感信息**（如 GitHub Secrets、Docker Secrets）
 3. **生产环境推荐使用 `FACTORY_API_KEY`**（更稳定，无需刷新）
-4. **定期更新 API 密钥和 refresh token**
-5. **启用 HTTPS**（云平台通常自动提供）
-6. **限制访问来源**（通过防火墙或云平台配置）
+4. **必须设置强 `ADMIN_ACCESS_KEY`** 保护管理后台
+5. **定期更新 API 密钥和 refresh token**
+6. **启用 HTTPS**（云平台通常自动提供）
+7. **限制管理后台访问来源**（通过防火墙或云平台配置）
+8. **定期备份 `key_pool.json`** 密钥池数据
+9. **使用数据卷持久化** 密钥池和日志数据
 
 ## 性能优化
 
@@ -312,22 +379,53 @@ services:
 
 ## 监控和日志
 
-### 查看实时日志
+### 日志系统
 
+droid2api 使用智能日志系统：
+
+**生产模式（NODE_ENV=production）**：
+- 控制台：简洁日志
+- 文件：详细日志写入 `logs/droid2api_YYYY-MM-DD.log`
+- 自动按天轮换
+
+**开发模式（NODE_ENV=development）**：
+- 控制台：详细日志
+- 文件：不写入
+
+### 查看日志
+
+**Docker Compose**：
 ```bash
+# 实时查看容器日志
 docker-compose logs -f
+
+# 查看最近100行
+docker-compose logs --tail=100
+
+# 查看文件日志（如果挂载了卷）
+docker exec droid2api ls /app/logs
+docker exec droid2api cat /app/logs/droid2api_2025-10-11.log
 ```
 
-### 导出日志
-
+**Docker 命令**：
 ```bash
+# 容器日志
+docker logs -f droid2api
+
+# 导出日志到文件
 docker logs droid2api > droid2api.log 2>&1
+
+# 访问容器内部日志文件
+docker exec -it droid2api sh
+cd logs
+ls -lh
 ```
 
 ### 集成监控工具
 
 可以集成：
-- Prometheus + Grafana
-- Datadog
-- New Relic
+- Prometheus + Grafana（指标监控）
+- Datadog（全栈监控）
+- New Relic（APM性能监控）
 - Sentry（错误追踪）
+- ELK Stack（日志聚合分析）

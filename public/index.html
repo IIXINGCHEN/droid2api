@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>密钥池管理系统 - droid2api</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- 老王：添加Google字体，让中文显示更好看 -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔑 密钥池管理系统</h1>
+            <p class="subtitle">droid2api 统一密钥管理平台 - 支持大规模密钥池轮询使用 · 自动封禁 · 可视化管理</p>
+        </header>
+
+        <!-- 认证区域 -->
+        <div id="authSection" class="auth-section">
+            <div class="auth-card">
+                <h2>🔐 管理员认证</h2>
+                <input type="password" id="adminKeyInput" placeholder="请输入管理员密钥" onkeypress="if(event.key==='Enter') authenticate()" />
+                <button onclick="authenticate()" class="btn btn-primary">登录</button>
+                <p class="hint">💡 管理员密钥配置在 .env 文件的 ADMIN_ACCESS_KEY<br>登录后会自动记住1小时，过期后需重新登录</p>
+            </div>
+        </div>
+
+        <!-- 主内容区域 -->
+        <div id="mainContent" class="main-content" style="display: none;">
+            <!-- 统计信息 -->
+            <div class="stats-container">
+                <div class="stat-card">
+                    <div class="stat-value" id="statTotal">0</div>
+                    <div class="stat-label">总密钥数</div>
+                </div>
+                <div class="stat-card stat-success">
+                    <div class="stat-value" id="statActive">0</div>
+                    <div class="stat-label">可用密钥</div>
+                </div>
+                <div class="stat-card stat-warning">
+                    <div class="stat-value" id="statDisabled">0</div>
+                    <div class="stat-label">已禁用</div>
+                </div>
+                <div class="stat-card stat-danger">
+                    <div class="stat-value" id="statBanned">0</div>
+                    <div class="stat-label">已封禁</div>
+                </div>
+                <!-- 老王：显示当前轮询算法 -->
+                <div class="stat-card stat-info">
+                    <div class="stat-value" id="statAlgorithm">轮询</div>
+                    <div class="stat-label">轮询算法</div>
+                </div>
+            </div>
+
+            <!-- 操作按钮区 -->
+            <div class="actions-container">
+                <button onclick="showAddKeyModal()" class="btn btn-primary">➕ 添加密钥</button>
+                <button onclick="showBatchImportModal()" class="btn btn-secondary">📥 批量导入</button>
+                <button onclick="exportKeys()" class="btn btn-secondary">📤 导出密钥</button>
+                <button onclick="testAllKeys()" class="btn btn-info">🧪 批量测试</button>
+                <button onclick="deleteDisabledKeys()" class="btn btn-warning">🗑️ 删除禁用密钥</button>
+                <button onclick="deleteBannedKeys()" class="btn btn-danger">🗑️ 删除封禁密钥</button>
+                <button onclick="refreshData()" class="btn btn-success">🔄 刷新</button>
+                <!-- 老王：添加轮询配置按钮 -->
+                <button onclick="showConfigModal()" class="btn btn-secondary">⚙️ 轮询配置</button>
+                <!-- 老王：添加退出登录按钮 -->
+                <button onclick="logout()" class="btn btn-warning" style="margin-left: auto;">🚪 退出登录</button>
+            </div>
+
+            <!-- 筛选区域 -->
+            <div class="filter-container">
+                <label>状态筛选：</label>
+                <select id="statusFilter" onchange="filterChanged()">
+                    <option value="all">全部</option>
+                    <option value="active">可用</option>
+                    <option value="disabled">已禁用</option>
+                    <option value="banned">已封禁</option>
+                </select>
+            </div>
+
+            <!-- 性能统计图表 -->
+            <div class="charts-container">
+                <div class="chart-card">
+                    <h3>📊 密钥状态分布</h3>
+                    <div class="chart-placeholder" id="statusChart">
+                        <canvas id="statusPieChart" width="300" height="200"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>🎯 成功率排行</h3>
+                    <div class="chart-placeholder" id="successRateChart">
+                        <div class="success-rate-list" id="successRateList">
+                            <!-- 动态生成成功率排行 -->
+                        </div>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>⚡ 使用热力图</h3>
+                    <div class="chart-placeholder" id="usageHeatmap">
+                        <div class="usage-stats" id="usageStats">
+                            <!-- 动态生成使用统计 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 密钥列表 -->
+            <div class="table-container">
+                <table class="keys-table">
+                    <thead>
+                        <tr>
+                            <th>密钥ID</th>
+                            <th>密钥</th>
+                            <th>状态</th>
+                            <th>使用次数</th>
+                            <th>错误次数</th>
+                            <th>成功率</th>
+                            <th>评分</th>
+                            <th>最后使用</th>
+                            <th>测试结果</th>
+                            <th>备注</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="keysTableBody">
+                        <tr>
+                            <td colspan="11" class="loading">加载中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 分页 -->
+            <div class="pagination" id="pagination"></div>
+        </div>
+    </div>
+
+    <!-- 添加密钥模态框 -->
+    <div id="addKeyModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('addKeyModal')">&times;</span>
+            <h2>添加密钥</h2>
+            <input type="text" id="newKeyInput" placeholder="fk-xxxxxxxx" class="modal-input" />
+            <textarea id="newKeyNotes" placeholder="备注(可选)" class="modal-textarea"></textarea>
+            <button onclick="addKey()" class="btn btn-primary">添加</button>
+        </div>
+    </div>
+
+    <!-- 批量导入模态框 -->
+    <div id="batchImportModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('batchImportModal')">&times;</span>
+            <h2>批量导入密钥</h2>
+            <textarea id="batchKeysInput" placeholder="每行一个密钥&#10;fk-xxxxxxxx&#10;fk-yyyyyyyy&#10;fk-zzzzzzzz" class="modal-textarea large"></textarea>
+            <button onclick="batchImport()" class="btn btn-primary">导入</button>
+            <div id="importResult" class="import-result"></div>
+        </div>
+    </div>
+
+    <!-- 编辑备注模态框 -->
+    <div id="editNotesModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('editNotesModal')">&times;</span>
+            <h2>编辑备注</h2>
+            <textarea id="editNotesInput" class="modal-textarea"></textarea>
+            <button onclick="saveNotes()" class="btn btn-primary">保存</button>
+        </div>
+    </div>
+
+    <!-- 老王：轮询配置模态框 -->
+    <div id="configModal" class="modal">
+        <div class="modal-content modal-content-large">
+            <span class="close" onclick="closeModal('configModal')">&times;</span>
+            <h2>⚙️ 轮询配置</h2>
+
+            <!-- 轮询算法 -->
+            <div class="config-section">
+                <h3>🔄 轮询算法</h3>
+                <div class="form-group">
+                    <label for="configAlgorithm">算法类型：</label>
+                    <select id="configAlgorithm" class="modal-input">
+                        <option value="round-robin">轮询 (Round-Robin) - 按顺序分配</option>
+                        <option value="random">随机 (Random) - 随机选择</option>
+                        <option value="least-used">最少使用 (Least-Used) - 选择使用次数最少的</option>
+                        <option value="weighted-score">加权评分 (Weighted-Score) - 基于成功率和使用情况智能选择</option>
+                    </select>
+                    <p class="hint">💡 轮询算法决定如何从密钥池中选择下一个密钥</p>
+                </div>
+            </div>
+
+            <!-- 重试机制 -->
+            <div class="config-section">
+                <h3>🔁 重试机制</h3>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="configRetryEnabled" />
+                        启用重试机制
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="configRetryMaxRetries">最大重试次数：</label>
+                    <input type="number" id="configRetryMaxRetries" min="0" max="10" class="modal-input" />
+                    <p class="hint">💡 范围：0-10，建议 2-3 次</p>
+                </div>
+                <div class="form-group">
+                    <label for="configRetryDelay">重试延迟 (ms)：</label>
+                    <input type="number" id="configRetryDelay" min="0" max="10000" step="100" class="modal-input" />
+                    <p class="hint">💡 范围：0-10000ms，建议 1000ms (1秒)</p>
+                </div>
+            </div>
+
+            <!-- 自动封禁 -->
+            <div class="config-section">
+                <h3>🚫 自动封禁</h3>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="configAutoBanEnabled" />
+                        启用自动封禁
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="configAutoBanThreshold">错误阈值：</label>
+                    <input type="number" id="configAutoBanThreshold" min="1" max="100" class="modal-input" />
+                    <p class="hint">💡 范围：1-100，连续错误达到此值将封禁密钥</p>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="configAutoBan402" />
+                        自动封禁 402 (余额不足)
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="configAutoBan401" />
+                        自动封禁 401 (认证失败)
+                    </label>
+                </div>
+            </div>
+
+            <!-- 性能配置 -->
+            <div class="config-section">
+                <h3>⚡ 性能配置</h3>
+                <div class="form-group">
+                    <label for="configConcurrentLimit">并发限制：</label>
+                    <input type="number" id="configConcurrentLimit" min="1" max="1000" class="modal-input" />
+                    <p class="hint">💡 范围：1-1000，同时处理的最大请求数</p>
+                </div>
+                <div class="form-group">
+                    <label for="configRequestTimeout">请求超时 (ms)：</label>
+                    <input type="number" id="configRequestTimeout" min="1000" max="60000" step="1000" class="modal-input" />
+                    <p class="hint">💡 范围：1000-60000ms，单个请求的超时时间</p>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="modal-actions">
+                <button onclick="saveConfig()" class="btn btn-primary">💾 保存配置</button>
+                <button onclick="resetConfigToDefault()" class="btn btn-warning">🔄 重置为默认值</button>
+                <button onclick="closeModal('configModal')" class="btn btn-secondary">❌ 取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

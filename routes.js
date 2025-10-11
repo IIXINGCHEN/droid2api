@@ -8,7 +8,7 @@ import { transformToCommon, getCommonHeaders } from './transformers/request-comm
 import { AnthropicResponseTransformer } from './transformers/response-anthropic.js';
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { getApiKey } from './auth.js';
-
+import keyPoolManager from './auth.js';
 const router = express.Router();
 
 /**
@@ -101,15 +101,18 @@ async function handleChatCompletions(req, res) {
 
     logInfo(`Routing to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    // Get API key (will auto-refresh if needed)
+    // Get API key from pool (轮询获取)
     let authHeader;
+    let currentKeyId;
     try {
-      authHeader = await getApiKey(req.headers.authorization);
+      const keyResult = await keyPoolManager.getNextKey();
+      authHeader = `Bearer ${keyResult.key}`;
+      currentKeyId = keyResult.keyId;
     } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({ 
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
+      logError('Failed to get API key from pool', error);
+      return res.status(500).json({
+        error: '密钥池错误',
+        message: error.message
       });
     }
 
@@ -149,12 +152,24 @@ async function handleChatCompletions(req, res) {
 
     logInfo(`Response status: ${response.status}`);
 
+    // 处理402错误 - 永久封禁密钥
+    if (response.status === 402) {
+      keyPoolManager.banKey(currentKeyId, 'Payment Required - No Credits');
+      const errorText = await response.text();
+      logError(`Key banned due to 402 error: ${currentKeyId}`, new Error(errorText));
+      return res.status(402).json({
+        error: 'Payment Required',
+        message: 'Key has been banned due to insufficient credits',
+        details: errorText
+      });
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Endpoint returned ${response.status}`,
-        details: errorText 
+        details: errorText
       });
     }
 
@@ -218,10 +233,16 @@ async function handleChatCompletions(req, res) {
 
   } catch (error) {
     logError('Error in /v1/chat/completions', error);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
-    });
+    // 老王：检查响应是否已经开始发送，避免重复发送导致崩溃
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message
+      });
+    } else {
+      // 流式响应已开始，直接结束连接
+      res.end();
+    }
   }
 }
 
@@ -244,7 +265,7 @@ async function handleDirectResponses(req, res) {
 
     // 只允许 openai 类型端点
     if (model.type !== 'openai') {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid endpoint type',
         message: `/v1/responses 接口只支持 openai 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
       });
@@ -257,23 +278,23 @@ async function handleDirectResponses(req, res) {
 
     logInfo(`Direct forwarding to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    // Get API key - support client x-api-key for anthropic endpoint
+    // Get API key from pool (轮询获取)
     let authHeader;
+    let currentKeyId;
     try {
-      const clientAuthFromXApiKey = req.headers['x-api-key']
-        ? `Bearer ${req.headers['x-api-key']}`
-        : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
+      const keyResult = await keyPoolManager.getNextKey();
+      authHeader = `Bearer ${keyResult.key}`;
+      currentKeyId = keyResult.keyId;
     } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({ 
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
+      logError('Failed to get API key from pool', error);
+      return res.status(500).json({
+        error: '密钥池错误',
+        message: error.message
       });
     }
 
     const clientHeaders = req.headers;
-    
+
     // 获取 headers
     const headers = getOpenAIHeaders(authHeader, clientHeaders);
 
@@ -316,12 +337,24 @@ async function handleDirectResponses(req, res) {
 
     logInfo(`Response status: ${response.status}`);
 
+    // 处理402错误 - 永久封禁密钥
+    if (response.status === 402) {
+      keyPoolManager.banKey(currentKeyId, 'Payment Required - No Credits');
+      const errorText = await response.text();
+      logError(`Key banned due to 402 error: ${currentKeyId}`, new Error(errorText));
+      return res.status(402).json({
+        error: 'Payment Required',
+        message: 'Key has been banned due to insufficient credits',
+        details: errorText
+      });
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Endpoint returned ${response.status}`,
-        details: errorText 
+        details: errorText
       });
     }
 
@@ -353,10 +386,16 @@ async function handleDirectResponses(req, res) {
 
   } catch (error) {
     logError('Error in /v1/responses', error);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
-    });
+    // 老王：检查响应是否已经开始发送，避免重复发送导致崩溃
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message
+      });
+    } else {
+      // 流式响应已开始，直接结束连接
+      res.end();
+    }
   }
 }
 
@@ -392,23 +431,23 @@ async function handleDirectMessages(req, res) {
 
     logInfo(`Direct forwarding to ${model.type} endpoint: ${endpoint.base_url}`);
 
-    // Get API key - support client x-api-key for anthropic endpoint
+    // Get API key from pool (轮询获取)
     let authHeader;
+    let currentKeyId;
     try {
-      const clientAuthFromXApiKey = req.headers['x-api-key']
-        ? `Bearer ${req.headers['x-api-key']}`
-        : null;
-      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
+      const keyResult = await keyPoolManager.getNextKey();
+      authHeader = `Bearer ${keyResult.key}`;
+      currentKeyId = keyResult.keyId;
     } catch (error) {
-      logError('Failed to get API key', error);
-      return res.status(500).json({ 
-        error: 'API key not available',
-        message: 'Failed to get or refresh API key. Please check server logs.'
+      logError('Failed to get API key from pool', error);
+      return res.status(500).json({
+        error: '密钥池错误',
+        message: error.message
       });
     }
 
     const clientHeaders = req.headers;
-    
+
     // 获取 headers
     const isStreaming = anthropicRequest.stream === true;
     const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId);
@@ -463,12 +502,24 @@ async function handleDirectMessages(req, res) {
 
     logInfo(`Response status: ${response.status}`);
 
+    // 处理402错误 - 永久封禁密钥
+    if (response.status === 402) {
+      keyPoolManager.banKey(currentKeyId, 'Payment Required - No Credits');
+      const errorText = await response.text();
+      logError(`Key banned due to 402 error: ${currentKeyId}`, new Error(errorText));
+      return res.status(402).json({
+        error: 'Payment Required',
+        message: 'Key has been banned due to insufficient credits',
+        details: errorText
+      });
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       logError(`Endpoint error: ${response.status}`, new Error(errorText));
-      return res.status(response.status).json({ 
+      return res.status(response.status).json({
         error: `Endpoint returned ${response.status}`,
-        details: errorText 
+        details: errorText
       });
     }
 
@@ -498,10 +549,16 @@ async function handleDirectMessages(req, res) {
 
   } catch (error) {
     logError('Error in /v1/messages', error);
-    res.status(500).json({ 
-      error: 'Internal server error',
-      message: error.message 
-    });
+    // 老王：检查响应是否已经开始发送，避免重复发送导致崩溃
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message
+      });
+    } else {
+      // 流式响应已开始，直接结束连接
+      res.end();
+    }
   }
 }
 

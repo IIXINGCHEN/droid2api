@@ -1,5 +1,6 @@
 import { logDebug } from '../logger.js';
 import { getSystemPrompt, getModelReasoning, getUserAgent } from '../config.js';
+import { generateUUID } from '../utils/uuid.js';
 
 export function transformToAnthropic(openaiRequest) {
   logDebug('Transforming OpenAI request to Anthropic format');
@@ -230,12 +231,4 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
   }
 
   return headers;
-}
-
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c == 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
 }
