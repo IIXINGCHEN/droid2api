@@ -555,7 +555,7 @@ router.get('/status', (req, res) => {
           </style>
         </head>
         <body>
-          <h1>droid2api v2.0.0 Status</h1>
+          <h1>droid2api v2.0.1 Status</h1>
           <div class="info">
             <p>Multi-key statistics are not available.</p>
             <p>This feature is only enabled when using FACTORY_API_KEY or factory_keys.txt with multiple keys.</p>
@@ -706,7 +706,7 @@ router.get('/status', (req, res) => {
         </script>
       </head>
       <body>
-        <h1>droid2api v2.0.0 Status</h1>
+        <h1>droid2api v2.0.1 Status</h1>
         
         <div class="section">
           <p style="text-align: center; color: #888; margin: 0;">

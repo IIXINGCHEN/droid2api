@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { logInfo, logDebug, logError } from './logger.js';
 
 /**
@@ -143,6 +145,9 @@ class KeyManager {
       });
       logInfo(`Key deprecated due to 402 response: ${this.maskKey(key)}`);
       
+      // 将完整的key值追加到deprecated_keys.txt文件
+      this.saveDeprecatedKeyToFile(key);
+      
       // 检查是否还有活跃的key
       const activeCount = this.keys.filter(k => !k.deprecated).length;
       if (activeCount === 0) {
@@ -150,6 +155,24 @@ class KeyManager {
       } else {
         logInfo(`Remaining active keys: ${activeCount}`);
       }
+    }
+  }
+  
+  /**
+   * 将废弃的key保存到文件
+   * @param {string} key - 完整的key值
+   */
+  saveDeprecatedKeyToFile(key) {
+    try {
+      const filePath = path.join(process.cwd(), 'deprecated_keys.txt');
+      const timestamp = new Date().toISOString();
+      const line = `${key} # Deprecated at ${timestamp}\n`;
+      
+      // 使用同步写入确保立即保存，防止程序意外中断
+      fs.appendFileSync(filePath, line, 'utf-8');
+      logInfo(`Deprecated key saved to deprecated_keys.txt`);
+    } catch (error) {
+      logError('Failed to save deprecated key to file', error);
     }
   }
   
