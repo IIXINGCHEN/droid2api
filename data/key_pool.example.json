@@ -1,0 +1,88 @@
+{
+  "poolGroups": [
+    {
+      "id": "freebies",
+      "name": "白嫖池",
+      "priority": 1,
+      "description": "捡来的免费密钥，优先消耗这些！用完不心疼 😎"
+    },
+    {
+      "id": "main",
+      "name": "主力池",
+      "priority": 2,
+      "description": "正式购买的密钥，白嫖池用完再用这些 💰"
+    },
+    {
+      "id": "test",
+      "name": "测试池",
+      "priority": 3,
+      "description": "测试专用密钥，最后才用（可选）🧪"
+    }
+  ],
+  "keys": [
+    {
+      "id": "key_1730000000000_example1",
+      "key": "fk-freebies123456789",
+      "provider": "factory",
+      "poolGroup": "freebies",
+      "status": "active",
+      "created_at": "2025-10-12T00:00:00.000Z",
+      "last_used_at": null,
+      "usage_count": 0,
+      "error_count": 0,
+      "last_error": null,
+      "last_test_at": null,
+      "last_test_result": "untested",
+      "banned_at": null,
+      "banned_reason": null,
+      "notes": "白嫖池密钥示例"
+    },
+    {
+      "id": "key_1730000000001_example2",
+      "key": "fk-main987654321",
+      "provider": "factory",
+      "poolGroup": "main",
+      "status": "active",
+      "created_at": "2025-10-12T00:00:00.000Z",
+      "last_used_at": null,
+      "usage_count": 0,
+      "error_count": 0,
+      "last_error": null,
+      "last_test_at": null,
+      "last_test_result": "untested",
+      "banned_at": null,
+      "banned_reason": null,
+      "notes": "主力池密钥示例"
+    }
+  ],
+  "stats": {
+    "total": 2,
+    "active": 2,
+    "disabled": 0,
+    "banned": 0,
+    "last_rotation_index": 0
+  },
+  "config": {
+    "algorithm": "round-robin",
+    "multiTier": {
+      "enabled": true,
+      "autoFallback": true,
+      "strictMode": false
+    },
+    "retry": {
+      "enabled": true,
+      "maxRetries": 3,
+      "retryDelay": 1000
+    },
+    "autoBan": {
+      "enabled": true,
+      "errorThreshold": 5,
+      "ban402": true,
+      "ban401": false
+    },
+    "performance": {
+      "concurrentLimit": 100,
+      "requestTimeout": 10000
+    }
+  }
+}
