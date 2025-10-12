@@ -1,6 +1,6 @@
 import { logDebug } from '../logger.js';
-import { getSystemPrompt, getModelReasoning, getUserAgent } from '../config.js';
-import { generateUUID } from '../utils/uuid.js';
+import { getSystemPrompt, getModelReasoning, getReasoningBudget } from '../config.js';
+import { getBaseHeaders, applyStainlessDefaults } from './headers-common.js';
 
 export function transformToAnthropic(openaiRequest) {
   logDebug('Transforming OpenAI request to Anthropic format');
@@ -122,15 +122,11 @@ export function transformToAnthropic(openaiRequest) {
     // If original request has no thinking field, don't add one
   } else if (reasoningLevel && ['low', 'medium', 'high'].includes(reasoningLevel)) {
     // Specific level: override with model configuration
-    const budgetTokens = {
-      'low': 4096,
-      'medium': 12288,
-      'high': 24576
-    };
-    
+    const budgetTokens = getReasoningBudget(reasoningLevel);
+
     anthropicRequest.thinking = {
       type: 'enabled',
-      budget_tokens: budgetTokens[reasoningLevel]
+      budget_tokens: budgetTokens
     };
   } else {
     // Off or invalid: explicitly remove thinking field
@@ -156,23 +152,14 @@ export function transformToAnthropic(openaiRequest) {
 }
 
 export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null) {
-  // Generate unique IDs if not provided
-  const sessionId = clientHeaders['x-session-id'] || generateUUID();
-  const messageId = clientHeaders['x-assistant-message-id'] || generateUUID();
-  
+  // 使用公共函数生成基础headers
   const headers = {
     'accept': 'application/json',
-    'content-type': 'application/json',
+    ...getBaseHeaders(authHeader, clientHeaders),
     'anthropic-version': clientHeaders['anthropic-version'] || '2023-06-01',
-    'authorization': authHeader || '',
     'x-api-provider': 'anthropic',
-    'x-factory-client': 'cli',
-    'x-session-id': sessionId,
-    'x-assistant-message-id': messageId,
-    'user-agent': getUserAgent(),
-    'x-stainless-timeout': '600',
-    'connection': 'keep-alive'
-  }
+    'x-stainless-timeout': '600'
+  };
 
   // Handle anthropic-beta header based on reasoning configuration
   const reasoningLevel = modelId ? getModelReasoning(modelId) : null;
@@ -204,26 +191,16 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
     headers['anthropic-beta'] = betaValues.join(', ');
   }
 
-  // Pass through Stainless SDK headers with defaults
-  const stainlessDefaults = {
-    'x-stainless-arch': 'x64',
-    'x-stainless-lang': 'js',
-    'x-stainless-os': 'MacOS',
-    'x-stainless-runtime': 'node',
-    'x-stainless-retry-count': '0',
-    'x-stainless-package-version': '0.57.0',
-    'x-stainless-runtime-version': 'v24.3.0'
-  };
+  // 应用Stainless SDK默认headers
+  applyStainlessDefaults(headers, clientHeaders);
+
+  // Anthropic特有：覆盖package-version
+  headers['x-stainless-package-version'] = clientHeaders['x-stainless-package-version'] || '0.57.0';
 
   // Set helper-method based on streaming
   if (isStreaming) {
     headers['x-stainless-helper-method'] = 'stream';
   }
-
-  // Copy Stainless headers from client or use defaults
-  Object.keys(stainlessDefaults).forEach(header => {
-    headers[header] = clientHeaders[header] || stainlessDefaults[header];
-  });
 
   // Override timeout from defaults if client provided
   if (clientHeaders['x-stainless-timeout']) {

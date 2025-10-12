@@ -3,7 +3,7 @@ import { logInfo, logError, logDebug } from '../logger.js';
 /**
  * 客户端认证中间件
  *
- * 老王：这个SB中间件用来验证客户端的访问权限，别tm让随便谁都能用咱们的代理！
+ * BaSui：这个SB中间件用来验证客户端的访问权限，别tm让随便谁都能用咱们的代理！
  *
  * 支持三种认证方式（按优先级）：
  * 1. FACTORY_API_KEY - 固定API密钥（最高优先级，跳过客户端验证）
@@ -11,7 +11,7 @@ import { logInfo, logError, logDebug } from '../logger.js';
  * 3. 无验证模式 - 如果没配置任何密钥，允许所有请求通过（开发模式）
  */
 export function validateClientAuth(req, res, next) {
-  // 老王：如果配置了FACTORY_API_KEY，说明是单用户模式，跳过客户端验证
+  // BaSui：如果配置了FACTORY_API_KEY，说明是单用户模式，跳过客户端验证
   const factoryKey = process.env.FACTORY_API_KEY;
   if (factoryKey) {
     logDebug('FACTORY_API_KEY configured, skipping client auth');
@@ -20,7 +20,7 @@ export function validateClientAuth(req, res, next) {
     return next();
   }
 
-  // 老王：检查是否配置了API_ACCESS_KEY（服务端访问密钥）
+  // BaSui：检查是否配置了API_ACCESS_KEY（服务端访问密钥）
   const apiAccessKey = process.env.API_ACCESS_KEY;
 
   // 如果没配置API_ACCESS_KEY，进入开发模式（允许所有请求）
@@ -31,7 +31,7 @@ export function validateClientAuth(req, res, next) {
     return next();
   }
 
-  // 老王：从请求头中提取客户端提供的密钥
+  // BaSui：从请求头中提取客户端提供的密钥
   // 支持两种格式：
   // 1. x-api-key: your_access_key
   // 2. authorization: Bearer your_access_key
@@ -45,7 +45,7 @@ export function validateClientAuth(req, res, next) {
     });
   }
 
-  // 老王：验证客户端密钥是否匹配
+  // BaSui：验证客户端密钥是否匹配
   if (clientKey !== apiAccessKey) {
     logError('Client auth failed: Invalid API key');
     return res.status(401).json({
@@ -78,7 +78,7 @@ function extractBearerToken(authHeader) {
 /**
  * 管理后台认证中间件
  *
- * 老王：管理后台要用更严格的密钥验证，别让憨批随便进来改密钥池！
+ * BaSui：管理后台要用更严格的密钥验证，别让憨批随便进来改密钥池！
  */
 export function validateAdminAuth(req, res, next) {
   const adminKey = process.env.ADMIN_ACCESS_KEY;

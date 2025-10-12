@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎯 密钥池选择 UI 测试页面</title>
+    <link rel="stylesheet" href="../public/style.css">
+    <style>
+        body {
+            padding: 40px;
+        }
+        .test-section {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+        }
+        .test-section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+        .test-buttons {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .test-result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f9fafb;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+        .test-result h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .test-result pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div class="header-title">
+                    <h1>🎯 密钥池选择 UI 测试</h1>
+                    <p class="subtitle">测试四个核心功能按钮的池子选择能力</p>
+                </div>
+            </div>
+        </header>
+
+        <!-- 测试区域 1：添加密钥 -->
+        <div class="test-section">
+            <h2>1️⃣ 添加密钥测试</h2>
+            <p>测试添加密钥时选择池子功能</p>
+            <div class="test-buttons">
+                <button onclick="testShowAddKeyModal()" class="btn btn-primary">打开添加密钥弹窗</button>
+                <button onclick="testAddKey()" class="btn btn-success">模拟添加密钥</button>
+            </div>
+            <div id="addKeyResult" class="test-result" style="display: none;">
+                <h3>测试结果：</h3>
+                <pre id="addKeyOutput"></pre>
+            </div>
+        </div>
+
+        <!-- 测试区域 2：批量导入 -->
+        <div class="test-section">
+            <h2>2️⃣ 批量导入测试</h2>
+            <p>测试批量导入时选择池子功能</p>
+            <div class="test-buttons">
+                <button onclick="testShowBatchImportModal()" class="btn btn-secondary">打开批量导入弹窗</button>
+                <button onclick="testBatchImport()" class="btn btn-success">模拟批量导入</button>
+            </div>
+            <div id="batchImportResult" class="test-result" style="display: none;">
+                <h3>测试结果：</h3>
+                <pre id="batchImportOutput"></pre>
+            </div>
+        </div>
+
+        <!-- 测试区域 3：导出密钥 -->
+        <div class="test-section">
+            <h2>3️⃣ 导出密钥测试</h2>
+            <p>测试导出密钥时选择池子和格式功能</p>
+            <div class="test-buttons">
+                <button onclick="testShowExportKeysModal()" class="btn btn-secondary">打开导出密钥弹窗</button>
+                <button onclick="testExportKeys()" class="btn btn-success">模拟导出密钥</button>
+            </div>
+            <div id="exportKeysResult" class="test-result" style="display: none;">
+                <h3>测试结果：</h3>
+                <pre id="exportKeysOutput"></pre>
+            </div>
+        </div>
+
+        <!-- 测试区域 4：批量测试 -->
+        <div class="test-section">
+            <h2>4️⃣ 批量测试测试</h2>
+            <p>测试批量测试时选择池子和并发数功能</p>
+            <div class="test-buttons">
+                <button onclick="testShowBatchTestModal()" class="btn btn-info">打开批量测试弹窗</button>
+                <button onclick="testBatchTest()" class="btn btn-success">模拟批量测试</button>
+            </div>
+            <div id="batchTestResult" class="test-result" style="display: none;">
+                <h3>测试结果：</h3>
+                <pre id="batchTestOutput"></pre>
+            </div>
+        </div>
+
+        <!-- 测试区域 5：池子选项加载 -->
+        <div class="test-section">
+            <h2>5️⃣ 池子选项加载测试</h2>
+            <p>测试动态加载池子选项功能</p>
+            <div class="test-buttons">
+                <button onclick="testLoadPoolOptions()" class="btn btn-primary">加载池子选项</button>
+                <button onclick="testInitializeAllSelects()" class="btn btn-success">初始化所有下拉框</button>
+            </div>
+            <div id="poolOptionsResult" class="test-result" style="display: none;">
+                <h3>测试结果：</h3>
+                <pre id="poolOptionsOutput"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- 引入所有模态框 -->
+    <div id="addKeyModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('addKeyModal')">&times;</span>
+            <h2>➕ 添加密钥</h2>
+            <div class="form-group">
+                <label for="newKeyInput">密钥：</label>
+                <input type="text" id="newKeyInput" placeholder="fk-xxxxxxxx" class="modal-input" />
+            </div>
+            <div class="form-group">
+                <label for="newKeyPoolGroup">🎯 所属密钥池：</label>
+                <select id="newKeyPoolGroup" class="modal-input">
+                    <option value="">默认池 (default)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="newKeyNotes">备注：</label>
+                <textarea id="newKeyNotes" placeholder="备注(可选)" class="modal-textarea"></textarea>
+            </div>
+            <button onclick="simulateAddKey()" class="btn btn-primary">添加</button>
+        </div>
+    </div>
+
+    <div id="batchImportModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('batchImportModal')">&times;</span>
+            <h2>📤 批量导入密钥</h2>
+            <div class="form-group">
+                <label for="batchImportPoolGroup">🎯 导入到哪个池：</label>
+                <select id="batchImportPoolGroup" class="modal-input">
+                    <option value="">默认池 (default)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="batchKeysInput">密钥列表 (每行一个)：</label>
+                <textarea id="batchKeysInput" placeholder="fk-xxx&#10;fk-yyy&#10;fk-zzz" class="modal-textarea large"></textarea>
+            </div>
+            <button onclick="simulateBatchImport()" class="btn btn-primary">📥 开始导入</button>
+            <div id="importResult" class="import-result"></div>
+        </div>
+    </div>
+
+    <div id="exportKeysModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('exportKeysModal')">&times;</span>
+            <h2>📥 导出密钥</h2>
+            <div class="form-group">
+                <label>🎯 导出哪个池：</label>
+                <div class="checkbox-group">
+                    <label class="filter-checkbox">
+                        <input type="checkbox" id="exportAllPools" checked onchange="toggleExportAllPools()">
+                        全部池 (导出所有密钥)
+                    </label>
+                </div>
+                <div id="exportPoolOptions" style="margin-top: 10px; display: none;">
+                    <select id="exportPoolGroup" class="modal-input" multiple size="5">
+                        <option value="default">默认池 (default)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>导出格式：</label>
+                <div class="radio-group">
+                    <label>
+                        <input type="radio" name="exportFormat" value="json" checked>
+                        JSON (完整数据)
+                    </label>
+                    <label>
+                        <input type="radio" name="exportFormat" value="text">
+                        纯文本 (仅密钥)
+                    </label>
+                    <label>
+                        <input type="radio" name="exportFormat" value="csv">
+                        CSV (表格)
+                    </label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>状态筛选：</label>
+                <select id="exportStatusFilter" class="modal-input">
+                    <option value="all">全部状态</option>
+                    <option value="active">仅可用</option>
+                    <option value="disabled">仅禁用</option>
+                    <option value="banned">仅封禁</option>
+                </select>
+            </div>
+            <button onclick="simulateExportKeys()" class="btn btn-primary">📥 导出文件</button>
+        </div>
+    </div>
+
+    <div id="batchTestModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('batchTestModal')">&times;</span>
+            <h2>🧪 批量测试密钥</h2>
+            <div class="form-group">
+                <label>🎯 测试哪个池：</label>
+                <div class="radio-group">
+                    <label>
+                        <input type="radio" name="testPool" value="all" checked>
+                        全部池 (测试所有密钥)
+                    </label>
+                    <label>
+                        <input type="radio" name="testPool" value="specific">
+                        指定池
+                    </label>
+                </div>
+                <div id="testPoolOptions" style="margin-top: 10px; display: none;">
+                    <select id="testPoolGroup" class="modal-input">
+                        <option value="default">默认池 (default)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="testConcurrency">测试并发数：</label>
+                <input type="number" id="testConcurrency" min="1" max="10" value="5" class="modal-input" />
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" id="testAutoRefresh" checked>
+                    测试完成后自动刷新列表
+                </label>
+            </div>
+            <button onclick="simulateBatchTest()" class="btn btn-primary">🧪 开始测试</button>
+            <div id="testResult" class="import-result" style="margin-top: 15px;"></div>
+        </div>
+    </div>
+
+    <script src="../public/app.js"></script>
+    <script src="../public/pool-selection-ui.js"></script>
+    <script>
+        // 模拟 API 请求函数（避免真实调用后端）
+        window.apiRequest = async function(url, method = 'GET', body = null) {
+            console.log(`🚀 模拟 API 请求: ${method} ${url}`, body);
+
+            // 模拟池子列表数据
+            if (url === '/pool-groups') {
+                return {
+                    success: true,
+                    data: [
+                        { id: 'freebies', name: '白嫖池', priority: 1, description: '优先消耗白嫖密钥' },
+                        { id: 'main', name: '主力池', priority: 2, description: '付费密钥兜底' },
+                        { id: 'backup', name: '备用池', priority: 3, description: '备用密钥' }
+                    ]
+                };
+            }
+
+            // 模拟添加密钥
+            if (url === '/keys' && method === 'POST') {
+                return {
+                    success: true,
+                    data: { id: 'key_1234567890', ...body }
+                };
+            }
+
+            // 模拟批量导入
+            if (url === '/keys/batch' && method === 'POST') {
+                return {
+                    success: true,
+                    data: {
+                        total: body.keys.length,
+                        success: body.keys.length,
+                        duplicate: 0,
+                        invalid: 0
+                    }
+                };
+            }
+
+            // 模拟批量测试
+            if (url.startsWith('/keys/test-all')) {
+                return {
+                    success: true,
+                    data: {
+                        total: 100,
+                        tested: 100,
+                        success: 95,
+                        failed: 5,
+                        banned: 5
+                    }
+                };
+            }
+
+            return { success: true, data: {} };
+        };
+
+        // 测试函数
+        function testShowAddKeyModal() {
+            showAddKeyModal();
+            document.getElementById('addKeyResult').style.display = 'block';
+            document.getElementById('addKeyOutput').textContent = '✅ 成功打开"添加密钥"模态框\n已加载池子选项！';
+        }
+
+        function testAddKey() {
+            document.getElementById('addKeyResult').style.display = 'block';
+            document.getElementById('addKeyOutput').textContent = JSON.stringify({
+                key: 'fk-test-key',
+                poolGroup: 'freebies',
+                notes: '测试密钥'
+            }, null, 2);
+        }
+
+        function testShowBatchImportModal() {
+            showBatchImportModal();
+            document.getElementById('batchImportResult').style.display = 'block';
+            document.getElementById('batchImportOutput').textContent = '✅ 成功打开"批量导入"模态框\n已加载池子选项！';
+        }
+
+        function testBatchImport() {
+            document.getElementById('batchImportResult').style.display = 'block';
+            document.getElementById('batchImportOutput').textContent = JSON.stringify({
+                keys: ['fk-xxx', 'fk-yyy', 'fk-zzz'],
+                poolGroup: 'freebies'
+            }, null, 2);
+        }
+
+        function testShowExportKeysModal() {
+            showExportKeysModal();
+            document.getElementById('exportKeysResult').style.display = 'block';
+            document.getElementById('exportKeysOutput').textContent = '✅ 成功打开"导出密钥"模态框\n已加载池子选项！';
+        }
+
+        function testExportKeys() {
+            document.getElementById('exportKeysResult').style.display = 'block';
+            document.getElementById('exportKeysOutput').textContent = JSON.stringify({
+                poolGroups: ['freebies', 'main'],
+                format: 'json',
+                status: 'active'
+            }, null, 2);
+        }
+
+        function testShowBatchTestModal() {
+            showBatchTestModal();
+            document.getElementById('batchTestResult').style.display = 'block';
+            document.getElementById('batchTestOutput').textContent = '✅ 成功打开"批量测试"模态框\n已加载池子选项！';
+        }
+
+        function testBatchTest() {
+            document.getElementById('batchTestResult').style.display = 'block';
+            document.getElementById('batchTestOutput').textContent = JSON.stringify({
+                poolGroup: 'freebies',
+                concurrency: 5,
+                autoRefresh: true
+            }, null, 2);
+        }
+
+        function testLoadPoolOptions() {
+            loadPoolGroupOptions('newKeyPoolGroup', true).then(() => {
+                document.getElementById('poolOptionsResult').style.display = 'block';
+                document.getElementById('poolOptionsOutput').textContent = '✅ 成功加载池子选项到 newKeyPoolGroup！';
+            });
+        }
+
+        function testInitializeAllSelects() {
+            initializeAllPoolSelects().then(() => {
+                document.getElementById('poolOptionsResult').style.display = 'block';
+                document.getElementById('poolOptionsOutput').textContent = '✅ 成功初始化所有下拉框的池子选项！';
+            });
+        }
+
+        // 模拟按钮点击
+        function simulateAddKey() {
+            const key = document.getElementById('newKeyInput').value;
+            const poolGroup = document.getElementById('newKeyPoolGroup').value;
+            const notes = document.getElementById('newKeyNotes').value;
+            alert(`模拟添加密钥：\n密钥: ${key}\n池子: ${poolGroup || 'default'}\n备注: ${notes}`);
+            closeModal('addKeyModal');
+        }
+
+        function simulateBatchImport() {
+            const keys = document.getElementById('batchKeysInput').value.split('\n').filter(k => k.trim());
+            const poolGroup = document.getElementById('batchImportPoolGroup').value;
+            alert(`模拟批量导入：\n密钥数: ${keys.length}\n池子: ${poolGroup || 'default'}`);
+            document.getElementById('importResult').innerHTML = `
+                <div class="result-summary success">
+                    <h3>✅ 成功导入 ${keys.length} 个密钥！</h3>
+                    <p>📊 总数: ${keys.length}</p>
+                    <p>✅ 成功: ${keys.length}</p>
+                    <p>🔄 重复: 0</p>
+                    <p>❌ 无效: 0</p>
+                    <p>🎯 导入到池: ${poolGroup || 'default'}</p>
+                </div>
+            `;
+        }
+
+        function simulateExportKeys() {
+            const exportAll = document.getElementById('exportAllPools').checked;
+            const format = document.querySelector('input[name="exportFormat"]:checked').value;
+            const status = document.getElementById('exportStatusFilter').value;
+            alert(`模拟导出密钥：\n导出全部: ${exportAll}\n格式: ${format}\n状态: ${status}`);
+            closeModal('exportKeysModal');
+        }
+
+        function simulateBatchTest() {
+            const testAll = document.querySelector('input[name="testPool"][value="all"]').checked;
+            const poolGroup = document.getElementById('testPoolGroup').value;
+            const concurrency = document.getElementById('testConcurrency').value;
+            alert(`模拟批量测试：\n测试全部: ${testAll}\n池子: ${poolGroup}\n并发数: ${concurrency}`);
+            document.getElementById('testResult').innerHTML = `
+                <div class="result-summary success">
+                    <h3>🎉 批量测试完成</h3>
+                    <p>📊 总密钥数: 100 个</p>
+                    <p>🔍 已测试: 100 个</p>
+                    <p>✅ 测试通过: 95 个</p>
+                    <p>❌ 测试失败: 5 个</p>
+                    <p>🚫 自动封禁: 5 个</p>
+                </div>
+            `;
+        }
+
+        // 页面加载时初始化
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                initializeAllPoolSelects();
+            }, 1000);
+        });
+    </script>
+</body>
+</html>

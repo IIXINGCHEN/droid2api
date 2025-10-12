@@ -106,16 +106,16 @@ export class AnthropicResponseTransformer {
   async *transformStream(sourceStream) {
     let buffer = '';
     let currentEvent = null;
-    // 老王：添加buffer大小保护，防止内存溢出（最大10KB未处理行）
+    // BaSui：添加buffer大小保护，防止内存溢出（最大10KB未处理行）
     const MAX_BUFFER_SIZE = 10 * 1024;
 
     try {
       for await (const chunk of sourceStream) {
-        // 老王：优化 - 避免超大chunk直接toString可能的性能问题
+        // BaSui：优化 - 避免超大chunk直接toString可能的性能问题
         const chunkStr = chunk.toString();
         buffer += chunkStr;
 
-        // 老王：内存保护 - 如果buffer过大说明没有换行符，截断并警告
+        // BaSui：内存保护 - 如果buffer过大说明没有换行符，截断并警告
         if (buffer.length > MAX_BUFFER_SIZE) {
           logDebug(`⚠️ Buffer size exceeded ${MAX_BUFFER_SIZE} bytes, truncating`);
           buffer = buffer.slice(-MAX_BUFFER_SIZE); // 保留最后10KB
@@ -136,7 +136,7 @@ export class AnthropicResponseTransformer {
             const transformed = this.transformEvent(currentEvent, parsed.value);
             if (transformed) {
               yield transformed;
-              // 老王：优化 - yield后立即释放引用，帮助GC
+              // BaSui：优化 - yield后立即释放引用，帮助GC
               currentEvent = null;
             } else {
               currentEvent = null;

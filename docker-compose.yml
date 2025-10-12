@@ -1,3 +1,7 @@
+# 🐳 droid2api - Docker Compose 配置
+# 版本：v1.4.0+
+# 文档：DOCKER_DEPLOY.md
+
 version: '3.8'
 
 services:
@@ -7,19 +11,113 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # 认证配置（按优先级选择其一）：
-      # 最高优先级：固定API密钥（推荐用于生产环境）
+      # ===== 🔐 五级认证配置（按优先级选择，至少配置一个） =====
+
+      # 1️⃣ 最高优先级：固定API密钥（推荐生产环境，单密钥模式）
       - FACTORY_API_KEY=${FACTORY_API_KEY}
-      # 次优先级：refresh token自动刷新机制
+
+      # 2️⃣ （密钥池管理在 Web 界面添加，无需环境变量）
+
+      # 3️⃣ 第三优先级：OAuth 自动刷新（6小时自动刷新）
       - DROID_REFRESH_KEY=${DROID_REFRESH_KEY}
-      # 可选：如果需要修改端口，在config.json中配置
+
+      # ===== 🔑 管理后台配置（强烈推荐） =====
+      - ADMIN_ACCESS_KEY=${ADMIN_ACCESS_KEY:-your-admin-password-change-me}
+
+      # ===== 🛡️ 客户端访问控制（可选） =====
+      - API_ACCESS_KEY=${API_ACCESS_KEY}
+
+      # ===== 🚀 服务器配置（可选） =====
+      - PORT=${PORT:-3000}
+      - NODE_ENV=${NODE_ENV:-production}
+
+      # ===== 🎯 密钥池配置（可选） =====
+      - KEY_POOL_ALGORITHM=${KEY_POOL_ALGORITHM:-round-robin}
+      - KEY_POOL_RETRY_ENABLED=${KEY_POOL_RETRY_ENABLED:-true}
+      - KEY_POOL_RETRY_MAX=${KEY_POOL_RETRY_MAX:-3}
+      - KEY_POOL_AUTO_BAN_ENABLED=${KEY_POOL_AUTO_BAN_ENABLED:-true}
+      - KEY_POOL_BAN_402=${KEY_POOL_BAN_402:-true}
+
+      # ===== 🔥 Redis 缓存配置（可选，性能优化） =====
+      # 启用 Redis 可提升性能 30-50%！
+      # - REDIS_HOST=redis
+      # - REDIS_PORT=6379
+      # - REDIS_PASSWORD=
+      # - REDIS_DB=0
+
+      # ===== ⚡ 集群模式配置（可选，极致性能） =====
+      # 启用集群模式可提升性能 N 倍（N = CPU核心数）！
+      # - CLUSTER_MODE=true
+      # - CLUSTER_WORKERS=4
+
     volumes:
-      # 可选：持久化auth.json以保存刷新的tokens
+      # 💾 持久化数据目录（推荐！容器重启不丢失密钥池数据）
       - ./data:/app/data
+      # 📝 持久化日志目录（可选）
+      - ./logs:/app/logs
+
     restart: unless-stopped
+
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+    # depends_on:
+    #   - redis  # 如果启用 Redis，取消注释此行
+
+  # ===== 🔥 Redis 缓存服务（可选） =====
+  # 适用场景：日均请求 > 50万
+  # 启用方式：取消注释以下配置，并在 droid2api 服务中设置 REDIS_HOST=redis
+
+  # redis:
+  #   image: redis:alpine
+  #   container_name: droid2api-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   command: redis-server --appendonly yes
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     retries: 3
+
+# ===== 📦 数据卷定义（可选） =====
+# 如果使用命名卷而非绑定挂载，取消注释以下配置
+
+# volumes:
+#   redis-data:
+
+# ===== 📖 使用说明 =====
+#
+# 快速开始（3步搞定）：
+#   1. cp .env.example .env
+#   2. 编辑 .env 文件，配置至少一个认证方式和 ADMIN_ACCESS_KEY
+#   3. docker-compose up -d
+#
+# 常用命令：
+#   启动服务：docker-compose up -d
+#   查看日志：docker-compose logs -f
+#   停止服务：docker-compose down
+#   重启服务：docker-compose restart
+#   查看状态：docker-compose ps
+#
+# 访问服务：
+#   API: http://localhost:3000
+#   管理界面: http://localhost:3000/ (需要 ADMIN_ACCESS_KEY)
+#   健康检查: http://localhost:3000/v1/models
+#
+# 性能优化：
+#   - 阶段1（默认）：2000+ RPS，无需配置
+#   - 阶段2（Redis）：3000+ RPS，取消注释 redis 服务配置
+#   - 阶段3（集群）：10000+ RPS，启用 CLUSTER_MODE=true
+#
+# 详细文档：
+#   - DOCKER_DEPLOY.md - Docker 部署指南
+#   - README.md - 项目文档
+#   - docs/MULTI_TIER_POOL.md - 多级密钥池说明

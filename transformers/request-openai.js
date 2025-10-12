@@ -1,6 +1,6 @@
 import { logDebug } from '../logger.js';
-import { getSystemPrompt, getModelReasoning, getUserAgent } from '../config.js';
-import { generateUUID } from '../utils/uuid.js';
+import { getSystemPrompt, getModelReasoning } from '../config.js';
+import { getBaseHeaders, applyStainlessDefaults } from './headers-common.js';
 
 export function transformToOpenAI(openaiRequest) {
   logDebug('Transforming OpenAI request to target OpenAI format');
@@ -135,36 +135,14 @@ export function transformToOpenAI(openaiRequest) {
 }
 
 export function getOpenAIHeaders(authHeader, clientHeaders = {}) {
-  // Generate unique IDs if not provided
-  const sessionId = clientHeaders['x-session-id'] || generateUUID();
-  const messageId = clientHeaders['x-assistant-message-id'] || generateUUID();
-  
+  // 使用公共函数生成基础headers
   const headers = {
-    'content-type': 'application/json',
-    'authorization': authHeader || '',
-    'x-api-provider': 'azure_openai',
-    'x-factory-client': 'cli',
-    'x-session-id': sessionId,
-    'x-assistant-message-id': messageId,
-    'user-agent': getUserAgent(),
-    'connection': 'keep-alive'
+    ...getBaseHeaders(authHeader, clientHeaders),
+    'x-api-provider': 'azure_openai'
   };
 
-  // Pass through Stainless SDK headers with defaults
-  const stainlessDefaults = {
-    'x-stainless-arch': 'x64',
-    'x-stainless-lang': 'js',
-    'x-stainless-os': 'MacOS',
-    'x-stainless-runtime': 'node',
-    'x-stainless-retry-count': '0',
-    'x-stainless-package-version': '5.23.2',
-    'x-stainless-runtime-version': 'v24.3.0'
-  };
-
-  // Copy Stainless headers from client or use defaults
-  Object.keys(stainlessDefaults).forEach(header => {
-    headers[header] = clientHeaders[header] || stainlessDefaults[header];
-  });
+  // 应用Stainless SDK默认headers
+  applyStainlessDefaults(headers, clientHeaders);
 
   return headers;
 }
