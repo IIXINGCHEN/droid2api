@@ -2,8 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fetch from 'node-fetch';
-import { logDebug, logError, logInfo } from './logger.js';
+import { logDebug, logError, logInfo, logWarning } from './logger.js';
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
+import { getKeyPoolConfig } from './config.js';
+import fetchWithPool from './utils/http-client.js';
+import fileWriterManager from './utils/async-file-writer.js';
+import redisCache from './utils/redis-cache.js';
+import {
+  selectKeyByWeightedUsage,
+  selectKeyByQuotaAware,
+  selectKeyByTimeWindow
+} from './utils/advanced-algorithms.js';
+import { oauthAuthenticator } from './auth-oauth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,8 +25,9 @@ const __dirname = path.dirname(__filename);
  */
 class KeyPoolManager {
   constructor() {
-    this.keyPoolPath = path.join(__dirname, 'key_pool.json');
+    this.keyPoolPath = path.join(__dirname, 'data', 'key_pool.json');
     this.keys = [];
+    this.poolGroups = [];  // 🚀 BaSui：多级密钥池配置
     this.stats = {
       total: 0,
       active: 0,
@@ -24,25 +35,8 @@ class KeyPoolManager {
       banned: 0,
       last_rotation_index: 0
     };
-    // 老王：添加轮询配置，支持多种算法和重试机制
-    this.config = {
-      algorithm: 'round-robin',  // 轮询算法: round-robin, random, least-used
-      retry: {
-        enabled: true,           // 启用重试
-        maxRetries: 3,          // 最大重试次数
-        retryDelay: 1000        // 重试延迟(毫秒)
-      },
-      autoBan: {
-        enabled: true,           // 启用自动封禁
-        errorThreshold: 5,      // 错误阈值（连续失败次数）
-        ban402: true,           // 402错误自动封禁
-        ban401: false           // 401错误是否封禁
-      },
-      performance: {
-        concurrentLimit: 100,   // 并发限制
-        requestTimeout: 10000   // 请求超时(毫秒)
-      }
-    };
+    // BaSui：从config.js加载配置（支持环境变量覆盖）
+    this.config = getKeyPoolConfig();
     this.currentKeyId = null;
     this.loadKeyPool();
   }
@@ -58,8 +52,12 @@ class KeyPoolManager {
         const pool = JSON.parse(data);
         this.keys = pool.keys || [];
         this.stats = pool.stats || this.stats;
-        // 老王：加载配置，如果没有则使用默认值
-    // 老王：深度合并配置，防止旧版本config覆盖新字段导致undefined！
+
+        // 🚀 BaSui：加载多级密钥池配置（poolGroups）
+        this.poolGroups = pool.poolGroups || [];
+
+        // BaSui：加载配置，如果没有则使用默认值
+    // BaSui：深度合并配置，防止旧版本config覆盖新字段导致undefined！
     if (pool.config) {
       // 合并algorithm
       this.config.algorithm = pool.config.algorithm || this.config.algorithm;
@@ -69,12 +67,20 @@ class KeyPoolManager {
       this.config.autoBan = { ...this.config.autoBan, ...(pool.config.autoBan || {}) };
       this.config.performance = { ...this.config.performance, ...(pool.config.performance || {}) };
 
-      // 老王：保留旧版本的weights字段（向后兼容weighted-score算法）
+      // 🚀 BaSui：合并 multiTier 配置（多级密钥池）
+      if (pool.config.multiTier) {
+        this.config.multiTier = { ...this.config.multiTier, ...pool.config.multiTier };
+      }
+
+      // BaSui：保留旧版本的weights字段（向后兼容weighted-score算法）
       if (pool.config.weights) {
         this.config.weights = pool.config.weights;
       }
     }
         logInfo(`Loaded ${this.keys.length} keys from key pool`);
+        if (this.poolGroups.length > 0) {
+          logInfo(`📊 Multi-tier pool enabled: ${this.poolGroups.length} pool groups`);
+        }
         logInfo(`Polling algorithm: ${this.config.algorithm}`);
       } else {
         logInfo('Key pool file not found, starting with empty pool');
@@ -87,10 +93,8 @@ class KeyPoolManager {
   }
 
   saveKeyPool() {
-    // 老王：文件保存重试机制 - 防止数据丢失！
-    const MAX_RETRIES = 3;
-    const RETRY_DELAY = 500; // 毫秒
-
+    // BaSui：🚀 性能优化 - 使用异步批量写入（不阻塞主线程）
+    // 高并发场景下，多次写入会自动合并为一次（debounce 1秒）
     this.stats.total = this.keys.length;
     this.stats.active = this.keys.filter(k => k.status === 'active').length;
     this.stats.disabled = this.keys.filter(k => k.status === 'disabled').length;
@@ -99,57 +103,50 @@ class KeyPoolManager {
     const data = {
       keys: this.keys,
       stats: this.stats,
+      poolGroups: this.poolGroups,  // 🚀 BaSui：保存多级密钥池配置
       config: this.config
     };
 
-    const jsonData = JSON.stringify(data, null, 2);
-    let lastError = null;
+    // BaSui：获取全局异步写入器（单例模式）
+    const writer = fileWriterManager.getWriter(this.keyPoolPath, {
+      debounceTime: 1000,  // 1秒内的多次写入合并为一次
+      maxRetries: 3,       // 失败重试3次
+      retryDelay: 500      // 重试延迟500ms
+    });
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        // 老王：先保存到临时文件，成功后再重命名（原子操作）
-        const tempPath = this.keyPoolPath + '.tmp';
-        fs.writeFileSync(tempPath, jsonData, 'utf-8');
+    // BaSui：异步写入（不会阻塞当前请求！）
+    // 注意：这里不用 await，让写入在后台进行
+    writer.write(data).catch(error => {
+      logError('密钥池异步保存失败', error);
+    });
 
-        // 老王：验证写入的数据是否正确（防止数据损坏）
-        const written = fs.readFileSync(tempPath, 'utf-8');
-        if (written !== jsonData) {
-          throw new Error('写入验证失败：文件内容不匹配');
-        }
+    logDebug('Key pool save scheduled (async)');
+  }
 
-        // 老王：备份旧文件（如果存在）
-        if (fs.existsSync(this.keyPoolPath)) {
-          const backupPath = this.keyPoolPath + '.bak';
-          fs.copyFileSync(this.keyPoolPath, backupPath);
-        }
+  /**
+   * BaSui：同步立即保存（用于关键操作，如测试密钥、删除密钥）
+   */
+  async saveKeyPoolImmediately() {
+    this.stats.total = this.keys.length;
+    this.stats.active = this.keys.filter(k => k.status === 'active').length;
+    this.stats.disabled = this.keys.filter(k => k.status === 'disabled').length;
+    this.stats.banned = this.keys.filter(k => k.status === 'banned').length;
 
-        // 老王：重命名临时文件为正式文件（原子操作，防止保存到一半进程崩溃）
-        fs.renameSync(tempPath, this.keyPoolPath);
+    const data = {
+      keys: this.keys,
+      stats: this.stats,
+      poolGroups: this.poolGroups,  // 🚀 BaSui：保存多级密钥池配置
+      config: this.config
+    };
 
-        logDebug('Key pool saved successfully' + (attempt > 0 ? ` (after ${attempt + 1} attempts)` : ''));
-        return; // 保存成功，退出
-      } catch (error) {
-        lastError = error;
-        logError(`Failed to save key pool (attempt ${attempt + 1}/${MAX_RETRIES})`, error);
-
-        // 如果不是最后一次尝试，等待后重试
-        if (attempt < MAX_RETRIES - 1) {
-          // 老王：同步睡眠（简单粗暴但有效）
-          const now = Date.now();
-          while (Date.now() - now < RETRY_DELAY) {
-            // 忙等待
-          }
-        }
-      }
-    }
-
-    // 老王：艹！所有重试都失败了，必须抛出异常！
-    throw new Error(`密钥池文件保存失败（尝试${MAX_RETRIES}次）: ${lastError.message}`);
+    const writer = fileWriterManager.getWriter(this.keyPoolPath);
+    await writer.writeImmediately(data);
+    logDebug('Key pool saved immediately');
   }
 
   async getNextKey() {
-    // 老王：只选用测试通过成功的key，没有就直接报错，简单粗暴！
-    const activeKeys = this.keys.filter(k =>
+    // BaSui：只选用测试通过成功的key，没有就直接报错，简单粗暴！
+    let activeKeys = this.keys.filter(k =>
       k.status === 'active' && k.last_test_result === 'success'
     );
 
@@ -165,13 +162,69 @@ class KeyPoolManager {
       );
     }
 
+    // 🚀 BaSui：多级密钥池支持！白嫖池用完自动降级到主力池！
+    // 如果启用了多级池功能，先按优先级筛选密钥
+    if (this.config.multiTier?.enabled) {
+      activeKeys = this._filterKeysByPoolPriority(activeKeys);
+
+      if (activeKeys.length === 0) {
+        throw new Error('所有密钥池都没有可用密钥了！请检查密钥状态或添加新密钥。');
+      }
+    }
+
     let keyObj;
 
-    // 老王：根据配置的算法选择密钥
+    // BaSui：根据配置的算法选择密钥
     switch (this.config.algorithm) {
       case 'weighted-score':
         // 加权评分算法：基于多个因素的综合评分选择最优密钥
         keyObj = await this.selectKeyByWeight(activeKeys);
+        break;
+
+      case 'least-token-used':
+        // 🎓 新算法：最少Token使用量算法
+        // 优先选择已使用Token最少的密钥，实现Token用量均衡
+        keyObj = await this.selectKeyByTokenUsage(activeKeys);
+        break;
+
+      case 'max-remaining':
+        // 🎓 新算法：最大剩余配额算法
+        // 优先选择剩余Token最多的密钥，避免密钥耗尽
+        keyObj = await this.selectKeyByRemaining(activeKeys);
+        break;
+
+      case 'weighted-usage':
+        // 🚀 高级算法：加权综合评分
+        // 综合考虑剩余Token(40%)、使用率(30%)、成功率(30%)
+        keyObj = await selectKeyByWeightedUsage(
+          activeKeys,
+          this.loadTokenUsageData.bind(this),
+          this.saveKeyPool.bind(this),
+          this.keys
+        );
+        break;
+
+      case 'quota-aware':
+        // 🚀 高级算法：配额感知
+        // 自动跳过达到配额上限的密钥
+        keyObj = await selectKeyByQuotaAware(
+          activeKeys,
+          this.loadTokenUsageData.bind(this),
+          this.saveKeyPool.bind(this),
+          this.keys,
+          this.config
+        );
+        break;
+
+      case 'time-window':
+        // 🚀 高级算法：时间窗口
+        // 基于最近N小时使用量选择
+        keyObj = await selectKeyByTimeWindow(
+          activeKeys,
+          this.saveKeyPool.bind(this),
+          this.keys,
+          this.config
+        );
         break;
 
       case 'random':
@@ -199,8 +252,16 @@ class KeyPoolManager {
         break;
     }
 
-    // 老王：加权评分算法已经在selectKeyByWeight中处理了统计更新，不需要重复处理
-    if (this.config.algorithm !== 'weighted-score') {
+    // BaSui：某些算法已经在内部处理了统计更新，不需要重复处理
+    const algorithmsWithInternalStats = [
+      'weighted-score',
+      'least-token-used',
+      'max-remaining',
+      'weighted-usage',
+      'quota-aware',
+      'time-window'
+    ];
+    if (!algorithmsWithInternalStats.includes(this.config.algorithm)) {
       keyObj.usage_count = (keyObj.usage_count || 0) + 1;
       keyObj.last_used_at = new Date().toISOString();
       this.saveKeyPool();
@@ -234,14 +295,30 @@ class KeyPoolManager {
     return this.currentKeyId;
   }
 
-  addKey(key, notes = '') {
+  addKey(key, notes = '', poolGroup = null) {
     if (this.keys.find(k => k.key === key)) {
       throw new Error('Key already exists');
     }
 
+    const trimmedKey = key.trim();
+
+    // 自动识别密钥提供商
+    let provider = 'factory';  // 默认为factory（因为当前项目主要使用factory）
+    if (trimmedKey.startsWith('fk-')) {
+      provider = 'factory';
+    } else if (trimmedKey.startsWith('sk-')) {
+      provider = 'openai';
+    } else if (trimmedKey.startsWith('claude-') || trimmedKey.includes('anthropic')) {
+      provider = 'anthropic';
+    } else if (trimmedKey.startsWith('glm-')) {
+      provider = 'glm';
+    }
+
     const keyObj = {
       id: this.generateId(),
-      key: key.trim(),
+      key: trimmedKey,
+      provider: provider,  // 添加提供商字段
+      poolGroup: poolGroup || 'default',  // 🚀 BaSui：添加密钥池分组字段！
       status: 'active',
       created_at: new Date().toISOString(),
       last_used_at: null,
@@ -257,7 +334,7 @@ class KeyPoolManager {
 
     this.keys.push(keyObj);
     this.saveKeyPool();
-    logInfo(`Added new key: ${keyObj.id}`);
+    logInfo(`Added new ${provider} key: ${keyObj.id} (pool: ${keyObj.poolGroup})`);
     return keyObj;
   }
 
@@ -277,9 +354,14 @@ class KeyPoolManager {
         return;
       }
 
-      if (!trimmedKey.startsWith('fk-')) {
+      // 验证密钥格式（支持多种格式）
+      const validFormats = ['fk-', 'sk-', 'claude-', 'glm-', 'pk-'];
+      const hasValidFormat = validFormats.some(prefix => trimmedKey.startsWith(prefix)) ||
+                            trimmedKey.length > 20; // 或者是足够长的密钥
+
+      if (!hasValidFormat) {
         results.invalid++;
-        results.errors.push(`Line ${index + 1}: Invalid key format (must start with 'fk-')`);
+        results.errors.push(`Line ${index + 1}: Invalid key format`);
         return;
       }
 
@@ -352,7 +434,7 @@ class KeyPoolManager {
 
     logInfo(`Testing key: ${keyId}`);
 
-    // 老王：实现重试机制，网络问题别一次就放弃！
+    // BaSui：实现重试机制，网络问题别一次就放弃！
     const retryConfig = this.config.retry;
     const maxRetries = retryConfig.enabled ? (retryConfig.maxRetries || 0) : 0;
     const retryDelay = retryConfig.retryDelay || 1000;
@@ -367,7 +449,7 @@ class KeyPoolManager {
 
         const testUrl = 'https://app.factory.ai/api/llm/a/v1/messages';
 
-        // 老王：复用转换层，别tm重复造轮子！这才是DRY原则
+        // BaSui：复用转换层，别tm重复造轮子！这才是DRY原则
         // 构建OpenAI格式的测试请求
         const openaiRequest = {
           model: 'claude-sonnet-4-5-20250929',
@@ -389,13 +471,14 @@ class KeyPoolManager {
           'claude-sonnet-4-5-20250929'  // modelId
         );
 
-        // 老王：使用AbortController实现超时控制，node-fetch v3不支持timeout选项！
+        // BaSui：使用AbortController实现超时控制，node-fetch v3不支持timeout选项！
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 10000);
 
         let response;
         try {
-          response = await fetch(testUrl, {
+          // BaSui：🚀 使用 HTTP 连接池（复用 TCP 连接，提升性能）
+          response = await fetchWithPool(testUrl, {
             method: 'POST',
             headers: headers,
             body: JSON.stringify(transformedRequest),
@@ -423,7 +506,7 @@ class KeyPoolManager {
           responseBody = { raw: responseText };
         }
 
-        // 老王：402错误是确定性错误，不需要重试，直接封禁并返回
+        // BaSui：402错误是确定性错误，不需要重试，直接封禁并返回
         if (response.status === 402) {
           const errorMsg = responseBody?.error?.message || 'Payment Required - No Credits';
           key.status = 'banned';
@@ -450,7 +533,7 @@ class KeyPoolManager {
           };
         }
 
-        // 老王：401认证失败，标记为禁用！可能是密钥无效或被撤销了！
+        // BaSui：401认证失败，标记为禁用！可能是密钥无效或被撤销了！
         if (response.status === 401) {
           const errorMsg = responseBody?.error?.message || 'Unauthorized - Invalid API Key';
           key.status = 'disabled';
@@ -475,7 +558,7 @@ class KeyPoolManager {
           };
         }
 
-        // 老王：测试成功，不需要重试
+        // BaSui：测试成功，不需要重试
         if (response.status === 200) {
           key.last_test_result = 'success';
           this.saveKeyPool();
@@ -489,12 +572,12 @@ class KeyPoolManager {
           };
         }
 
-        // 老王：其他HTTP错误状态，如果是5xx可能是临时问题，可以重试
+        // BaSui：其他HTTP错误状态，如果是5xx可能是临时问题，可以重试
         const errorMsg = responseBody?.error?.message || response.statusText || 'Unknown error';
 
         // 4xx错误（除了429）是确定性错误，不重试
         if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-          key.status = 'disabled';  // 老王：非200状态自动禁用密钥！
+          key.status = 'disabled';  // BaSui：非200状态自动禁用密钥！
           key.last_test_result = 'failed';
           key.error_count = (key.error_count || 0) + 1;
           key.last_error = `${response.status}: ${errorMsg}`;
@@ -522,7 +605,7 @@ class KeyPoolManager {
       } catch (error) {
         lastError = error;
 
-        // 老王：如果还有重试机会，继续；否则退出循环
+        // BaSui：如果还有重试机会，继续；否则退出循环
         if (attempt < maxRetries) {
           logInfo(`Key test attempt ${attempt + 1} failed: ${error.message}, will retry...`);
           continue;
@@ -533,8 +616,8 @@ class KeyPoolManager {
       }
     }
 
-    // 老王：所有重试都失败，记录最后的错误
-    key.status = 'disabled';  // 老王：所有重试都失败，禁用密钥！
+    // BaSui：所有重试都失败，记录最后的错误
+    key.status = 'disabled';  // BaSui：所有重试都失败，禁用密钥！
     key.last_test_result = 'failed';
     key.error_count = (key.error_count || 0) + 1;
     key.last_error = lastError.message;
@@ -558,10 +641,10 @@ class KeyPoolManager {
       banned: 0
     };
 
-    // 老王：只测试非封禁状态的密钥
+    // BaSui：只测试非封禁状态的密钥
     const keysToTest = this.keys.filter(k => k.status !== 'banned');
 
-    // 老王：并发数从配置读取，支持动态调整！默认10个
+    // BaSui：并发数从配置读取，支持动态调整！默认10个
     const concurrentLimit = Math.max(1, Math.min(this.config.performance.concurrentLimit || 10, 50));
 
     logInfo(`Starting batch test for ${keysToTest.length} keys (${concurrentLimit} concurrent)...`);
@@ -595,7 +678,7 @@ class KeyPoolManager {
         }
       });
 
-      // 老王：批次之间短暂延迟，避免速率限制（1秒）
+      // BaSui：批次之间短暂延迟，避免速率限制（1秒）
       if (i + concurrentLimit < keysToTest.length) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
@@ -668,15 +751,26 @@ class KeyPoolManager {
     return count;
   }
 
-  // 老王：配置管理方法
+  // BaSui：配置管理方法
   getConfig() {
     return this.config;
   }
 
   updateConfig(newConfig) {
-    // 老王：验证配置的合法性
-    if (newConfig.algorithm && !['round-robin', 'random', 'least-used', 'weighted-score'].includes(newConfig.algorithm)) {
-      throw new Error('Invalid algorithm. Must be: round-robin, random, least-used, or weighted-score');
+    // BaSui：验证配置的合法性
+    const validAlgorithms = [
+      'round-robin',
+      'random',
+      'least-used',
+      'weighted-score',
+      'least-token-used',
+      'max-remaining',
+      'weighted-usage',
+      'quota-aware',
+      'time-window'
+    ];
+    if (newConfig.algorithm && !validAlgorithms.includes(newConfig.algorithm)) {
+      throw new Error(`Invalid algorithm. Must be one of: ${validAlgorithms.join(', ')}`);
     }
 
     if (newConfig.retry) {
@@ -688,7 +782,7 @@ class KeyPoolManager {
       }
     }
 
-    // 老王：合并配置（深度合并）
+    // BaSui：合并配置（深度合并）
     if (newConfig.algorithm) {
       this.config.algorithm = newConfig.algorithm;
     }
@@ -705,13 +799,18 @@ class KeyPoolManager {
       this.config.performance = { ...this.config.performance, ...newConfig.performance };
     }
 
+    // 🚀 BaSui：合并多级密钥池配置
+    if (newConfig.multiTier) {
+      this.config.multiTier = { ...this.config.multiTier, ...newConfig.multiTier };
+    }
+
     this.saveKeyPool();
-    logInfo(`Config updated: algorithm=${this.config.algorithm}`);
+    logInfo(`Config updated: algorithm=${this.config.algorithm}, multiTier.enabled=${this.config.multiTier?.enabled}`);
     return this.config;
   }
 
   resetConfig() {
-    // 老王：重置为默认配置
+    // BaSui：重置为默认配置
     this.config = {
       algorithm: 'round-robin',
       retry: {
@@ -728,6 +827,11 @@ class KeyPoolManager {
       performance: {
         concurrentLimit: 100,
         requestTimeout: 10000
+      },
+      // 🚀 BaSui：多级密钥池默认配置
+      multiTier: {
+        enabled: false,
+        autoFallback: true
       }
     };
     this.saveKeyPool();
@@ -735,10 +839,289 @@ class KeyPoolManager {
     return this.config;
   }
 
-  // ========== 老王：加权轮询和Token统计新功能 ==========
+  // ========== 🚀 BaSui：多级密钥池核心功能（白嫖池 → 主力池自动降级！） ==========
+
+  /**
+   * 🎓 BaSui 老师讲解：多级密钥池筛选方法
+   *
+   * 这个方法是多级密钥池的核心！它会：
+   * 1. 从 poolGroups 中按 priority 排序（1 = 最高优先级）
+   * 2. 依次筛选每个池子的可用密钥
+   * 3. 如果高优先级池子有密钥，直接返回那个池子的密钥
+   * 4. 如果高优先级池子没密钥了，自动降级到下一个池子
+   * 5. 如果所有池子都没密钥，返回空数组
+   *
+   * 举例：
+   * - 白嫖池（priority 1）有 10 个密钥 → 用白嫖池
+   * - 白嫖池用完了 → 自动切换到主力池（priority 2）
+   * - 这样你的正经密钥就得到保护了！💰
+   *
+   * @param {Array} activeKeys - 所有测试通过的可用密钥
+   * @returns {Array} - 筛选后的密钥列表（只包含当前应该使用的池子）
+   */
+  _filterKeysByPoolPriority(activeKeys) {
+    // BaSui：如果没有配置 poolGroups，返回所有密钥（降级处理）
+    if (!this.poolGroups || this.poolGroups.length === 0) {
+      logDebug('No pool groups configured, using all active keys');
+      return activeKeys;
+    }
+
+    // BaSui：按优先级排序（priority 越小优先级越高）
+    const sortedGroups = [...this.poolGroups].sort((a, b) => a.priority - b.priority);
+
+    // BaSui：依次尝试每个池子
+    for (const group of sortedGroups) {
+      // 筛选属于当前池子的密钥
+      const poolKeys = activeKeys.filter(k => k.poolGroup === group.id);
+
+      if (poolKeys.length > 0) {
+        // 找到有密钥的池子了！
+        logInfo(`🎯 多级密钥池：使用 "${group.name}" (优先级 ${group.priority})，可用密钥 ${poolKeys.length} 个`);
+        return poolKeys;
+      } else {
+        // 这个池子没密钥，记录一下并尝试下一个
+        logDebug(`Pool "${group.name}" (priority ${group.priority}) has no available keys, trying next...`);
+      }
+    }
+
+    // BaSui：所有配置的池子都没密钥，检查是否有"未分组"的密钥
+    const ungroupedKeys = activeKeys.filter(k => !k.poolGroup || k.poolGroup === 'default');
+    if (ungroupedKeys.length > 0) {
+      logWarning(`⚠️ 所有配置的池子都没密钥，使用 ${ungroupedKeys.length} 个未分组密钥`);
+      return ungroupedKeys;
+    }
+
+    // BaSui：真的一个密钥都没了！
+    logError('❌ 所有密钥池（包括未分组）都没有可用密钥了！');
+    return [];
+  }
+
+  /**
+   * 🎯 BaSui：获取各池子的统计信息（用于管理面板展示）
+   *
+   * 返回示例：
+   * [
+   *   {
+   *     id: "freebies",
+   *     name: "白嫖池",
+   *     priority: 1,
+   *     total: 50,
+   *     active: 40,
+   *     disabled: 5,
+   *     banned: 5,
+   *     usage_rate: 0.8  // 使用率
+   *   },
+   *   {
+   *     id: "main",
+   *     name: "主力池",
+   *     priority: 2,
+   *     total: 100,
+   *     active: 95,
+   *     disabled: 3,
+   *     banned: 2,
+   *     usage_rate: 0.95
+   *   }
+   * ]
+   */
+  getPoolGroupStats() {
+    if (!this.poolGroups || this.poolGroups.length === 0) {
+      return [];
+    }
+
+    return this.poolGroups.map(group => {
+      // 筛选属于这个池子的密钥
+      const poolKeys = this.keys.filter(k => k.poolGroup === group.id);
+      const total = poolKeys.length;
+      const active = poolKeys.filter(k => k.status === 'active').length;
+      const disabled = poolKeys.filter(k => k.status === 'disabled').length;
+      const banned = poolKeys.filter(k => k.status === 'banned').length;
+
+      return {
+        ...group,
+        total,
+        active,
+        disabled,
+        banned,
+        usage_rate: total > 0 ? active / total : 0
+      };
+    });
+  }
+
+  // ========== BaSui：加权轮询和Token统计新功能 ==========
+
+  /**
+   * 🎓 老师讲解：加载Token使用量数据（从token-usage-routes.js缓存的数据）
+   *
+   * 为什么需要这个方法？
+   * - token_usage.json 包含每个密钥的真实Token用量
+   * - 我们要根据用量来选择密钥，必须先加载这些数据
+   *
+   * 数据结构：
+   * {
+   *   "keys": {
+   *     "key_xxx": {
+   *       "standard": {
+   *         "orgTotalTokensUsed": 2051536,  // 已用Token
+   *         "remaining": 35948464,           // 剩余Token
+   *         "totalAllowance": 38000000       // 总配额
+   *       }
+   *     }
+   *   }
+   * }
+   */
+  loadTokenUsageData() {
+    const tokenUsageFile = path.join(__dirname, 'data', 'token_usage.json');
+
+    try {
+      if (fs.existsSync(tokenUsageFile)) {
+        const data = fs.readFileSync(tokenUsageFile, 'utf-8');
+        const parsed = JSON.parse(data);
+
+        logDebug(`加载Token使用量数据: ${Object.keys(parsed.keys || {}).length} 个密钥`);
+        return parsed.keys || {};
+      }
+    } catch (error) {
+      logError('加载Token使用量数据失败', error);
+    }
+
+    // 返回空对象（没有数据时降级处理）
+    return {};
+  }
+
+  /**
+   * 🎓 老师讲解：least-token-used 算法实现
+   *
+   * 算法目标：选择已使用Token最少的密钥
+   *
+   * 实现步骤：
+   * 1. 加载所有密钥的Token使用量数据
+   * 2. 为每个active密钥绑定其Token使用量
+   * 3. 按 orgTotalTokensUsed 升序排序
+   * 4. 选择第一个（使用量最少的）
+   *
+   * 边界情况处理：
+   * - 如果没有Token使用量数据 → 降级到 round-robin
+   * - 如果某个密钥没有统计数据 → 认为它使用量为0（优先选择）
+   */
+  async selectKeyByTokenUsage(activeKeys) {
+    // BaSui：加载Token使用量数据
+    const tokenUsageData = this.loadTokenUsageData();
+
+    // BaSui：如果没有统计数据，降级处理（直接选第一个）
+    if (Object.keys(tokenUsageData).length === 0) {
+      logInfo('⚠️ 没有Token使用量数据，降级使用 round-robin 算法');
+      const keyObj = activeKeys[0];
+      keyObj.usage_count = (keyObj.usage_count || 0) + 1;
+      keyObj.last_used_at = new Date().toISOString();
+      this.saveKeyPool();
+      return keyObj;
+    }
+
+    // BaSui：为每个密钥绑定Token使用量（如果没有数据则认为是0）
+    const keysWithUsage = activeKeys.map(key => {
+      const usageInfo = tokenUsageData[key.id];
+      const tokenUsed = usageInfo?.standard?.orgTotalTokensUsed || 0;
+      const remaining = usageInfo?.standard?.remaining || 0;
+
+      return {
+        ...key,
+        token_used: tokenUsed,
+        token_remaining: remaining
+      };
+    });
+
+    // BaSui：按已使用Token数量升序排序（使用量最少的排在前面）
+    keysWithUsage.sort((a, b) => a.token_used - b.token_used);
+
+    // BaSui：选择使用量最少的密钥
+    const selectedKey = keysWithUsage[0];
+
+    // BaSui：更新使用统计
+    selectedKey.usage_count = (selectedKey.usage_count || 0) + 1;
+    selectedKey.last_used_at = new Date().toISOString();
+
+    // BaSui：保存到密钥池
+    const originalKey = this.keys.find(k => k.id === selectedKey.id);
+    if (originalKey) {
+      originalKey.usage_count = selectedKey.usage_count;
+      originalKey.last_used_at = selectedKey.last_used_at;
+      this.saveKeyPool();
+    }
+
+    logInfo(`🎯 least-token-used: 选中密钥 ${selectedKey.id.substring(0, 20)}... (已用Token: ${selectedKey.token_used.toLocaleString()}, 剩余: ${selectedKey.token_remaining.toLocaleString()})`);
+
+    return selectedKey;
+  }
+
+  /**
+   * 🎓 老师讲解：max-remaining 算法实现
+   *
+   * 算法目标：选择剩余Token配额最多的密钥
+   *
+   * 实现步骤：
+   * 1. 加载所有密钥的Token使用量数据
+   * 2. 为每个active密钥绑定其剩余Token配额
+   * 3. 按 remaining 降序排序（剩余最多的排前面）
+   * 4. 选择第一个（剩余配额最多的）
+   *
+   * 适用场景：
+   * - 避免密钥耗尽：优先用"富裕"的密钥
+   * - 延长密钥生命周期：让接近上限的密钥休息
+   */
+  async selectKeyByRemaining(activeKeys) {
+    // BaSui：复用数据加载逻辑
+    const tokenUsageData = this.loadTokenUsageData();
+
+    // BaSui：降级处理
+    if (Object.keys(tokenUsageData).length === 0) {
+      logInfo('⚠️ 没有Token使用量数据，降级使用 round-robin 算法');
+      const keyObj = activeKeys[0];
+      keyObj.usage_count = (keyObj.usage_count || 0) + 1;
+      keyObj.last_used_at = new Date().toISOString();
+      this.saveKeyPool();
+      return keyObj;
+    }
+
+    // BaSui：绑定剩余Token数据
+    const keysWithUsage = activeKeys.map(key => {
+      const usageInfo = tokenUsageData[key.id];
+      const remaining = usageInfo?.standard?.remaining || 0;
+      const totalAllowance = usageInfo?.standard?.totalAllowance || 0;
+      const usedRatio = usageInfo?.standard?.usedRatio || 0;
+
+      return {
+        ...key,
+        token_remaining: remaining,
+        token_allowance: totalAllowance,
+        token_used_ratio: usedRatio
+      };
+    });
+
+    // BaSui：按剩余Token降序排序（剩余最多的排前面）
+    keysWithUsage.sort((a, b) => b.token_remaining - a.token_remaining);
+
+    // BaSui：选择剩余配额最多的密钥
+    const selectedKey = keysWithUsage[0];
+
+    // BaSui：更新使用统计
+    selectedKey.usage_count = (selectedKey.usage_count || 0) + 1;
+    selectedKey.last_used_at = new Date().toISOString();
+
+    // BaSui：保存到密钥池
+    const originalKey = this.keys.find(k => k.id === selectedKey.id);
+    if (originalKey) {
+      originalKey.usage_count = selectedKey.usage_count;
+      originalKey.last_used_at = selectedKey.last_used_at;
+      this.saveKeyPool();
+    }
+
+    logInfo(`🎯 max-remaining: 选中密钥 ${selectedKey.id.substring(0, 20)}... (剩余Token: ${selectedKey.token_remaining.toLocaleString()}, 使用率: ${(selectedKey.token_used_ratio * 100).toFixed(1)}%)`);
+
+    return selectedKey;
+  }
 
   calculateKeyScore(keyInfo, useCache = true) {
-    // 老王：评分缓存优化 - 5分钟内不重复计算，大幅提升性能！
+    // BaSui：评分缓存优化 - 5分钟内不重复计算，大幅提升性能！
     const CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
     const now = Date.now();
 
@@ -768,7 +1151,7 @@ class KeyPoolManager {
     const totalScore = successScore * weights.success_rate + freshnessScore * weights.freshness + experienceScore * weights.experience;
     const roundedScore = Math.round(totalScore * 100) / 100;
 
-    // 老王：更新缓存
+    // BaSui：更新缓存
     keyInfo.score_cache = roundedScore;
     keyInfo.score_cache_time = now;
 
@@ -793,14 +1176,14 @@ class KeyPoolManager {
         key.success_rate = key.total_requests > 0 ? key.success_requests / key.total_requests : 0;
       }
 
-      // 老王：初始化缓存字段（如果不存在）
+      // BaSui：初始化缓存字段（如果不存在）
       if (typeof key.score_cache === 'undefined') {
         key.score_cache = undefined;
         key.score_cache_time = undefined;
         migrated = true;
       }
 
-      // 老王：迁移时强制重新计算评分（不使用缓存）
+      // BaSui：迁移时强制重新计算评分（不使用缓存）
       key.weight_score = this.calculateKeyScore(key, false);
     });
 
@@ -813,7 +1196,7 @@ class KeyPoolManager {
   }
 
   async selectKeyByWeight(activeKeys = null) {
-    // 老王：优先使用传入的activeKeys，如果没有则内部过滤
+    // BaSui：优先使用传入的activeKeys，如果没有则内部过滤
     const availableKeys = activeKeys || this.keys.filter(k => k.status === 'active' && k.last_test_result === 'success');
 
     if (availableKeys.length === 0) {
@@ -822,13 +1205,13 @@ class KeyPoolManager {
 
     if (availableKeys.length === 1) {
       const key = availableKeys[0];
-      // 老王：单个密钥也使用缓存计算评分
+      // BaSui：单个密钥也使用缓存计算评分
       key.weight_score = this.calculateKeyScore(key, true);
       logInfo('唯一可用密钥 ' + key.id.substring(0, 15) + '...（评分：' + key.weight_score + '）');
       return key;
     }
 
-    // 老王：使用缓存计算评分，大幅提升性能！
+    // BaSui：使用缓存计算评分，大幅提升性能！
     availableKeys.forEach(key => { key.weight_score = this.calculateKeyScore(key, true); });
 
     const totalScore = availableKeys.reduce((sum, k) => sum + (k.weight_score || 1), 0);
@@ -854,7 +1237,7 @@ class KeyPoolManager {
     selectedKey.total_requests = (selectedKey.total_requests || 0) + 1;
     selectedKey.usage_count = (selectedKey.usage_count || 0) + 1;
 
-    // 老王：使用后状态变化，清除缓存（下次会重新计算）
+    // BaSui：使用后状态变化，清除缓存（下次会重新计算）
     selectedKey.score_cache = undefined;
     selectedKey.score_cache_time = undefined;
 
@@ -880,7 +1263,7 @@ class KeyPoolManager {
 
     key.success_rate = key.total_requests > 0 ? key.success_requests / key.total_requests : 0;
 
-    // 老王：状态变化了，强制重新计算评分（不使用缓存）
+    // BaSui：状态变化了，强制重新计算评分（不使用缓存）
     key.weight_score = this.calculateKeyScore(key, false);
 
     this.saveKeyPool();
@@ -894,19 +1277,81 @@ const keyPoolManager = new KeyPoolManager();
 export { KeyPoolManager };
 export default keyPoolManager;
 
+/**
+ * 🚀 BaSui：初始化认证系统（五级优先级架构）
+ *
+ * 认证优先级（从高到低）：
+ * 1️⃣ FACTORY_API_KEY 环境变量（单用户模式）
+ * 2️⃣ 密钥池管理（多用户模式，轮询算法）
+ * 3️⃣ DROID_REFRESH_KEY 环境变量（OAuth 自动刷新）
+ * 4️⃣ data/auth.json / ~/.factory/auth.json（文件认证）
+ * 5️⃣ 客户端 Authorization Header（透传模式）
+ */
 export async function initializeAuth() {
-  logInfo('Key pool manager initialized');
+  logInfo('🚀 Initializing authentication system...');
+
+  // BaSui：1️⃣ 检查 FACTORY_API_KEY 环境变量
+  const factoryKey = process.env.FACTORY_API_KEY;
+  if (factoryKey && factoryKey.trim() !== '') {
+    logInfo('✅ FACTORY_API_KEY detected (single-user mode) - Highest priority');
+  }
+
+  // BaSui：2️⃣ 初始化密钥池
   keyPoolManager.migrateKeyPoolData();
   const stats = keyPoolManager.getStats();
-  logInfo('Key pool status: ' + stats.active + ' active, ' + stats.disabled + ' disabled, ' + stats.banned + ' banned');
+  logInfo(`✅ Key pool initialized: ${stats.active} active, ${stats.disabled} disabled, ${stats.banned} banned`);
+
+  // BaSui：3️⃣ 初始化 OAuth 认证（DROID_REFRESH_KEY / auth.json）
+  await oauthAuthenticator.initialize();
+
+  logInfo('🎉 Authentication system initialized successfully!');
 }
 
+/**
+ * 🚀 BaSui：获取 API Key（五级认证优先级实现）
+ *
+ * 这是核心认证函数，按优先级依次尝试：
+ * 1️⃣ FACTORY_API_KEY → 2️⃣ 密钥池 → 3️⃣ OAuth → 4️⃣ 文件认证 → 5️⃣ 客户端 Header
+ */
 export async function getApiKey() {
-  try {
-    const result = await keyPoolManager.getNextKey();
-    return 'Bearer ' + result.key;
-  } catch (error) {
-    logError('Failed to get API key from pool', error);
-    throw error;
+  // 1️⃣ 最高优先级：FACTORY_API_KEY 环境变量
+  const factoryKey = process.env.FACTORY_API_KEY;
+  if (factoryKey && factoryKey.trim() !== '') {
+    logDebug('Using FACTORY_API_KEY from environment (single-user mode)');
+    return `Bearer ${factoryKey.trim()}`;
   }
+
+  // 2️⃣ 次优先级：密钥池管理（如果有可用密钥）
+  try {
+    const stats = keyPoolManager.getStats();
+    if (stats.active > 0) {
+      const result = await keyPoolManager.getNextKey();
+      logDebug(`Using key from key pool: ${result.keyId}`);
+      return `Bearer ${result.key}`;
+    }
+  } catch (error) {
+    // BaSui：密钥池没有可用密钥，继续尝试 OAuth
+    logDebug('Key pool not available or empty, trying OAuth authentication...');
+  }
+
+  // 3️⃣ 第三优先级：DROID_REFRESH_KEY 或 data/auth.json
+  try {
+    const oauthKey = await oauthAuthenticator.getOAuthApiKey();
+    if (oauthKey) {
+      logDebug('Using OAuth authentication (DROID_REFRESH_KEY or auth.json)');
+      return `Bearer ${oauthKey}`;
+    }
+  } catch (error) {
+    logError('OAuth authentication failed', error);
+  }
+
+  // 4️⃣ 最后兜底：抛出错误（客户端 Authorization 由 middleware 处理）
+  throw new Error(
+    'No API key available. Please configure one of the following:\n' +
+    '  1. FACTORY_API_KEY environment variable (single-user mode)\n' +
+    '  2. Add keys to key pool via admin API (/admin/keys/add)\n' +
+    '  3. DROID_REFRESH_KEY environment variable (OAuth auto-refresh)\n' +
+    '  4. Create data/auth.json or ~/.factory/auth.json (file-based auth)\n' +
+    '  5. Provide Authorization header in client request (pass-through mode)'
+  );
 }
