@@ -1,5 +1,5 @@
 /**
- * 老王：公共UUID生成器，别tm到处重复写了！
+ * BaSui：公共UUID生成器，别tm到处重复写了！
  * 遵循DRY原则 - Don't Repeat Yourself
  */
 
