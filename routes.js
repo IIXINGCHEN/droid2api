@@ -9,7 +9,24 @@ import { AnthropicResponseTransformer } from './transformers/response-anthropic.
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { getApiKey } from './auth.js';
 import keyPoolManager from './auth.js';
+import fetchWithPool from './utils/http-client.js';
+import {
+  getNextKeyFromPool,
+  handle402Error,
+  handleUpstreamError,
+  handleStreamResponse,
+  handleNonStreamResponse,
+  recordTokenUsage
+} from './utils/route-helpers.js';
+import {
+  createTokenStats,
+  extractAnthropicTokens,
+  extractOpenAITokens,
+  extractCommonTokens
+} from './utils/token-extractor.js';
 const router = express.Router();
+
+
 
 /**
  * Convert a /v1/responses API result to a /v1/chat/completions-compatible format.
@@ -144,7 +161,8 @@ async function handleChatCompletions(req, res) {
 
     logRequest('POST', endpoint.base_url, headers, transformedRequest);
 
-    const response = await fetch(endpoint.base_url, {
+    // BaSui：🚀 使用 HTTP 连接池（复用 TCP 连接，减少握手开销）
+    const response = await fetchWithPool(endpoint.base_url, {
       method: 'POST',
       headers,
       body: JSON.stringify(transformedRequest)
@@ -180,11 +198,34 @@ async function handleChatCompletions(req, res) {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
+      // BaSui: 收集流式响应中的Token统计（完整版 - 包含 thinking 和 cache tokens）
+      const tokenStats = createTokenStats();
+
       // common 类型直接转发，不使用 transformer
       if (model.type === 'common') {
         try {
+          let buffer = '';
           for await (const chunk of response.body) {
             res.write(chunk);
+
+            // BaSui: 解析SSE流，提取Token使用量
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.startsWith('data:')) {
+                try {
+                  const dataStr = line.slice(5).trim();
+                  if (dataStr === '[DONE]') continue;
+                  const data = JSON.parse(dataStr);
+                  // 使用新的 Token 提取工具函数
+                  extractCommonTokens(data, tokenStats);
+                } catch (e) {
+                  // 忽略非JSON行
+                }
+              }
+            }
           }
           res.end();
           logInfo('Stream forwarded (common type)');
@@ -195,6 +236,8 @@ async function handleChatCompletions(req, res) {
       } else {
         // anthropic 和 openai 类型使用 transformer
         let transformer;
+        let buffer = '';
+
         if (model.type === 'anthropic') {
           transformer = new AnthropicResponseTransformer(modelId, `chatcmpl-${Date.now()}`);
         } else if (model.type === 'openai') {
@@ -202,7 +245,48 @@ async function handleChatCompletions(req, res) {
         }
 
         try {
-          for await (const chunk of transformer.transformStream(response.body)) {
+          // BaSui: 同时解析原始流和转换后的流
+          const rawChunks = [];
+          for await (const chunk of response.body) {
+            rawChunks.push(chunk);
+          }
+
+          // BaSui: 先从原始流中提取Token统计
+          for (const chunk of rawChunks) {
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              if (line.startsWith('data:')) {
+                try {
+                  const dataStr = line.slice(5).trim();
+                  if (dataStr === '[DONE]') continue;
+
+                  const data = JSON.parse(dataStr);
+
+                  if (model.type === 'anthropic') {
+                    // 使用新的 Token 提取工具函数（自动处理所有 Token 类型）
+                    extractAnthropicTokens(data, tokenStats);
+                  } else {
+                    // 使用新的 Token 提取工具函数（OpenAI 格式）
+                    extractOpenAITokens(data, tokenStats);
+                  }
+                } catch (e) {
+                  // 忽略非JSON行
+                }
+              }
+            }
+          }
+
+          // BaSui: 然后转换并转发
+          const rawStream = (async function* () {
+            for (const chunk of rawChunks) {
+              yield chunk;
+            }
+          })();
+
+          for await (const chunk of transformer.transformStream(rawStream)) {
             res.write(chunk);
           }
           res.end();
@@ -212,8 +296,31 @@ async function handleChatCompletions(req, res) {
           res.end();
         }
       }
+
+      // BaSui: 记录Token使用量统计（包含完整的 Token 类型）
+      try {
+        if (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) {
+          const { recordRequest } = await import('./utils/request-stats.js');
+          recordRequest({
+            inputTokens: tokenStats.inputTokens,
+            outputTokens: tokenStats.outputTokens,
+            thinkingTokens: tokenStats.thinkingTokens,
+            cacheCreationTokens: tokenStats.cacheCreationTokens,
+            cacheReadTokens: tokenStats.cacheReadTokens,
+            model: modelId,
+            success: true
+          });
+          logDebug(`流式响应Token统计(/v1/chat/completions): input=${tokenStats.inputTokens}, output=${tokenStats.outputTokens}, thinking=${tokenStats.thinkingTokens}, cache_creation=${tokenStats.cacheCreationTokens}, cache_read=${tokenStats.cacheReadTokens}`);
+        }
+      } catch (err) {
+        logError('记录Token统计失败', err);
+      }
     } else {
       const data = await response.json();
+
+      // 记录Token使用量
+      recordTokenUsage(data, model.type, currentKeyId);
+
       if (model.type === 'openai') {
         try {
           const converted = convertResponseToChatCompletion(data);
@@ -233,7 +340,7 @@ async function handleChatCompletions(req, res) {
 
   } catch (error) {
     logError('Error in /v1/chat/completions', error);
-    // 老王：检查响应是否已经开始发送，避免重复发送导致崩溃
+    // BaSui：检查响应是否已经开始发送，避免重复发送导致崩溃
     if (!res.headersSent) {
       res.status(500).json({
         error: 'Internal server error',
@@ -328,8 +435,8 @@ async function handleDirectResponses(req, res) {
 
     logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
-    // 转发修改后的请求
-    const response = await fetch(endpoint.base_url, {
+    // BaSui：🚀 使用 HTTP 连接池转发修改后的请求
+    const response = await fetchWithPool(endpoint.base_url, {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
@@ -367,12 +474,51 @@ async function handleDirectResponses(req, res) {
       res.setHeader('Connection', 'keep-alive');
 
       try {
+        // BaSui: 收集流式响应中的Token统计（完整版）
+        const tokenStats = createTokenStats();
+        let buffer = '';
+
         // 直接将原始响应流转发给客户端
         for await (const chunk of response.body) {
           res.write(chunk);
+
+          // BaSui: 解析SSE流，提取Token使用量（OpenAI格式）
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // 保留最后不完整的行
+
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              try {
+                const dataStr = line.slice(5).trim();
+                if (dataStr === '[DONE]') continue;
+
+                const data = JSON.parse(dataStr);
+                // 使用新的 Token 提取工具函数（OpenAI 格式）
+                extractOpenAITokens(data, tokenStats);
+              } catch (e) {
+                // 忽略非JSON行
+              }
+            }
+          }
         }
         res.end();
         logInfo('Stream forwarded successfully');
+
+        // BaSui: 记录Token使用量统计（包含完整的 Token 类型）
+        if (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) {
+          const { recordRequest } = await import('./utils/request-stats.js');
+          recordRequest({
+            inputTokens: tokenStats.inputTokens,
+            outputTokens: tokenStats.outputTokens,
+            thinkingTokens: tokenStats.thinkingTokens,
+            cacheCreationTokens: tokenStats.cacheCreationTokens,
+            cacheReadTokens: tokenStats.cacheReadTokens,
+            model: modelId,
+            success: true
+          });
+          logDebug(`流式响应Token统计(/v1/responses): input=${tokenStats.inputTokens}, output=${tokenStats.outputTokens}, thinking=${tokenStats.thinkingTokens}, cache_creation=${tokenStats.cacheCreationTokens}, cache_read=${tokenStats.cacheReadTokens}`);
+        }
       } catch (streamError) {
         logError('Stream error', streamError);
         res.end();
@@ -380,13 +526,17 @@ async function handleDirectResponses(req, res) {
     } else {
       // 直接转发非流式响应，不做任何转换
       const data = await response.json();
+
+      // 记录Token使用量
+      recordTokenUsage(data, 'openai', currentKeyId);
+
       logResponse(200, null, data);
       res.json(data);
     }
 
   } catch (error) {
     logError('Error in /v1/responses', error);
-    // 老王：检查响应是否已经开始发送，避免重复发送导致崩溃
+    // BaSui：检查响应是否已经开始发送，避免重复发送导致崩溃
     if (!res.headersSent) {
       res.status(500).json({
         error: 'Internal server error',
@@ -493,8 +643,8 @@ async function handleDirectMessages(req, res) {
 
     logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
-    // 转发修改后的请求
-    const response = await fetch(endpoint.base_url, {
+    // BaSui：🚀 使用 HTTP 连接池转发修改后的请求
+    const response = await fetchWithPool(endpoint.base_url, {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
@@ -530,12 +680,48 @@ async function handleDirectMessages(req, res) {
       res.setHeader('Connection', 'keep-alive');
 
       try {
+        // BaSui: 收集流式响应中的Token统计（完整版 - 包含 thinking 和 cache tokens）
+        const tokenStats = createTokenStats();
+        let buffer = '';
+
         // 直接将原始响应流转发给客户端
         for await (const chunk of response.body) {
           res.write(chunk);
+
+          // BaSui: 解析SSE流，提取Token使用量
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // 保留最后不完整的行
+
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              try {
+                const data = JSON.parse(line.slice(5).trim());
+                // 使用新的 Token 提取工具函数（自动处理所有 Token 类型）
+                extractAnthropicTokens(data, tokenStats);
+              } catch (e) {
+                // 忽略非JSON行
+              }
+            }
+          }
         }
         res.end();
         logInfo('Stream forwarded successfully');
+
+        // BaSui: 记录Token使用量统计（包含完整的 Token 类型）
+        if (tokenStats.inputTokens > 0 || tokenStats.outputTokens > 0) {
+          const { recordRequest } = await import('./utils/request-stats.js');
+          recordRequest({
+            inputTokens: tokenStats.inputTokens,
+            outputTokens: tokenStats.outputTokens,
+            thinkingTokens: tokenStats.thinkingTokens,
+            cacheCreationTokens: tokenStats.cacheCreationTokens,
+            cacheReadTokens: tokenStats.cacheReadTokens,
+            model: modelId,
+            success: true
+          });
+          logDebug(`流式响应Token统计(/v1/messages): input=${tokenStats.inputTokens}, output=${tokenStats.outputTokens}, thinking=${tokenStats.thinkingTokens}, cache_creation=${tokenStats.cacheCreationTokens}, cache_read=${tokenStats.cacheReadTokens}`);
+        }
       } catch (streamError) {
         logError('Stream error', streamError);
         res.end();
@@ -543,13 +729,17 @@ async function handleDirectMessages(req, res) {
     } else {
       // 直接转发非流式响应，不做任何转换
       const data = await response.json();
+
+      // 记录Token使用量
+      recordTokenUsage(data, 'anthropic', currentKeyId);
+
       logResponse(200, null, data);
       res.json(data);
     }
 
   } catch (error) {
     logError('Error in /v1/messages', error);
-    // 老王：检查响应是否已经开始发送，避免重复发送导致崩溃
+    // BaSui：检查响应是否已经开始发送，避免重复发送导致崩溃
     if (!res.headersSent) {
       res.status(500).json({
         error: 'Internal server error',
@@ -562,9 +752,96 @@ async function handleDirectMessages(req, res) {
   }
 }
 
+// BaSui: 处理Anthropic token计数请求（不调用模型，只计算token数）
+async function handleCountTokens(req, res) {
+  logInfo('POST /v1/messages/count_tokens');
+
+  try {
+    const anthropicRequest = req.body;
+    const modelId = anthropicRequest.model;
+
+    if (!modelId) {
+      return res.status(400).json({ error: 'model is required' });
+    }
+
+    const model = getModelById(modelId);
+    if (!model) {
+      return res.status(404).json({ error: `Model ${modelId} not found` });
+    }
+
+    // 只允许 anthropic 类型端点
+    if (model.type !== 'anthropic') {
+      return res.status(400).json({
+        error: 'Invalid endpoint type',
+        message: `/v1/messages/count_tokens 接口只支持 anthropic 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+      });
+    }
+
+    const endpoint = getEndpointByType(model.type);
+    if (!endpoint) {
+      return res.status(500).json({ error: `Endpoint type ${model.type} not found` });
+    }
+
+    logInfo(`Counting tokens for ${model.type} endpoint: ${endpoint.base_url}/count_tokens`);
+
+    // Get API key from pool (轮询获取)
+    let authHeader;
+    let currentKeyId;
+    try {
+      const keyResult = await keyPoolManager.getNextKey();
+      authHeader = `Bearer ${keyResult.key}`;
+      currentKeyId = keyResult.keyId;
+    } catch (error) {
+      logError('Failed to get API key from pool', error);
+      return res.status(500).json({
+        error: '密钥池错误',
+        message: error.message
+      });
+    }
+
+    const clientHeaders = req.headers;
+
+    // 获取 headers（count_tokens不需要stream参数）
+    const headers = getAnthropicHeaders(authHeader, clientHeaders, false, modelId);
+
+    logRequest('POST', `${endpoint.base_url}/count_tokens`, headers, anthropicRequest);
+
+    // BaSui：调用Anthropic的count_tokens端点
+    const response = await fetchWithPool(`${endpoint.base_url}/count_tokens`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(anthropicRequest)
+    });
+
+    logInfo(`Response status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logError(`Endpoint error: ${response.status}`, new Error(errorText));
+      return res.status(response.status).json({
+        error: `Endpoint returned ${response.status}`,
+        details: errorText
+      });
+    }
+
+    // 返回token计数结果
+    const data = await response.json();
+    logResponse(200, null, data);
+    res.json(data);
+
+  } catch (error) {
+    logError('Error in /v1/messages/count_tokens', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+}
+
 // 注册路由
 router.post('/v1/chat/completions', handleChatCompletions);
 router.post('/v1/responses', handleDirectResponses);
 router.post('/v1/messages', handleDirectMessages);
+router.post('/v1/messages/count_tokens', handleCountTokens);  // BaSui: 新增token计数端点
 
 export default router;
