@@ -4,12 +4,12 @@ let currentPage = 1;
 let currentStatus = 'all';
 let currentEditKeyId = null;
 
-// 老王：localStorage的key名称
+// BaSui：localStorage的key名称
 const STORAGE_KEY_ADMIN = 'droid2api_admin_key';
 const STORAGE_KEY_LOGIN_TIME = 'droid2api_login_time';
 const LOGIN_EXPIRE_HOURS = 1; // 1小时过期
 
-// 老王：HTTP状态码中文映射，让用户看懂这些SB代码是啥意思
+// BaSui：HTTP状态码中文映射，让用户看懂这些SB代码是啥意思
 const HTTP_STATUS_MAP = {
     200: '请求成功',
     201: '创建成功',
@@ -26,7 +26,7 @@ const HTTP_STATUS_MAP = {
     0: '网络错误或请求超时'
 };
 
-// 老王：根据状态码获取中文说明
+// BaSui：根据状态码获取中文说明
 function getStatusMessage(statusCode) {
     return HTTP_STATUS_MAP[statusCode] || `未知错误 (${statusCode})`;
 }
@@ -44,13 +44,13 @@ function authenticate() {
     // 测试认证
     fetchStats()
         .then(() => {
-            // 老王：认证成功后保存到localStorage，包含密钥和登录时间
+            // BaSui：认证成功后保存到localStorage，包含密钥和登录时间
             localStorage.setItem(STORAGE_KEY_ADMIN, key);
             localStorage.setItem(STORAGE_KEY_LOGIN_TIME, Date.now().toString());
 
             document.getElementById('authSection').style.display = 'none';
             document.getElementById('mainContent').style.display = 'block';
-            refreshData();
+            refreshData(true);  // BaSui: 传递true确保初始加载时显示Token和余额数据
         })
         .catch(err => {
             alert('认证失败: ' + err.message);
@@ -58,7 +58,7 @@ function authenticate() {
         });
 }
 
-// 老王：退出登录功能
+// BaSui：退出登录功能
 function logout() {
     if (!confirm('确认退出登录？')) return;
 
@@ -75,7 +75,7 @@ function logout() {
     document.getElementById('adminKeyInput').value = '';
 }
 
-// 老王：检查登录是否过期
+// BaSui：检查登录是否过期
 function isLoginExpired() {
     const loginTime = localStorage.getItem(STORAGE_KEY_LOGIN_TIME);
     if (!loginTime) return true; // 没有登录时间，认为过期
@@ -87,14 +87,14 @@ function isLoginExpired() {
     return (now - loginTimestamp) > expireTime;
 }
 
-// 老王：清除过期的登录信息
+// BaSui：清除过期的登录信息
 function clearExpiredLogin() {
     localStorage.removeItem(STORAGE_KEY_ADMIN);
     localStorage.removeItem(STORAGE_KEY_LOGIN_TIME);
     adminKey = '';
 }
 
-// 老王：页面加载时自动认证
+// BaSui：页面加载时自动认证
 function autoAuthenticate() {
     const savedKey = localStorage.getItem(STORAGE_KEY_ADMIN);
 
@@ -103,7 +103,7 @@ function autoAuthenticate() {
         return;
     }
 
-    // 老王：检查登录是否过期
+    // BaSui：检查登录是否过期
     if (isLoginExpired()) {
         console.log('登录已过期，清除登录信息');
         clearExpiredLogin();
@@ -119,7 +119,7 @@ function autoAuthenticate() {
             // 密钥有效，直接进入主界面
             document.getElementById('authSection').style.display = 'none';
             document.getElementById('mainContent').style.display = 'block';
-            refreshData();
+            refreshData(true);  // BaSui: 传递true确保初始加载时显示Token和余额数据
         })
         .catch(err => {
             // 密钥无效，清除保存的密钥，显示登录界面
@@ -129,7 +129,7 @@ function autoAuthenticate() {
         });
 }
 
-// 老王：页面加载时执行自动认证
+// BaSui：页面加载时执行自动认证
 window.addEventListener('DOMContentLoaded', autoAuthenticate);
 
 // API 请求封装
@@ -165,7 +165,7 @@ async function fetchStats() {
     document.getElementById('statDisabled').textContent = data.disabled;
     document.getElementById('statBanned').textContent = data.banned;
 
-    // 老王：同时获取当前轮询算法配置并显示
+    // BaSui：同时获取当前轮询算法配置并显示
     try {
         const configResponse = await apiRequest('/config');
         const config = configResponse.data;
@@ -183,14 +183,15 @@ async function fetchKeys() {
     const params = new URLSearchParams({
         page: currentPage,
         limit: 10,
-        status: currentStatus
+        status: currentStatus,
+        includeTokenUsage: 'true'  // BaSui: 包含Token使用量信息
     });
 
     const response = await apiRequest(`/keys?${params}`);
     const data = response.data;  // 解包后端的 {success, data} 结构
     renderKeysTable(data.keys);
     renderPagination(data.pagination);
-    // 老王：新增图表渲染
+    // BaSui：新增图表渲染
     renderCharts(data.keys);
 }
 
@@ -199,12 +200,12 @@ function renderKeysTable(keys) {
     const tbody = document.getElementById('keysTableBody');
 
     if (keys.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" class="loading">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="14" class="loading">暂无数据</td></tr>';
         return;
     }
 
     tbody.innerHTML = keys.map(key => {
-        // 老王：生成测试结果的详细显示（包含状态码和中文说明）
+        // BaSui：生成测试结果的详细显示（包含状态码和中文说明）
         let testResultHtml = '';
         if (key.last_test_result === 'success') {
             testResultHtml = '<span class="test-success">✅ 测试通过</span>';
@@ -224,23 +225,58 @@ function renderKeysTable(keys) {
             testResultHtml = '<span class="test-untested">⏸️ 未测试</span>';
         }
 
-        // 计算成功率和评分
+        // 计算成功率和评分 - BaSui修复：确保成功次数准确
         const totalRequests = key.total_requests || key.usage_count || 0;
-        const successRequests = key.success_requests || (totalRequests - (key.error_count || 0));
+        const errorCount = key.error_count || 0;
+        const successRequests = key.success_requests !== undefined
+            ? key.success_requests
+            : (totalRequests - errorCount);
         const successRate = totalRequests > 0 ? (successRequests / totalRequests) : 0;
         const successRateText = totalRequests > 0 ? (successRate * 100).toFixed(1) + '%' : 'N/A';
         const successRateClass = successRate >= 0.9 ? 'success-rate-high' :
                                successRate >= 0.7 ? 'success-rate-medium' :
                                successRate > 0 ? 'success-rate-low' : 'success-rate-none';
 
+        // BaSui: Token使用量显示（带颜色提示和剩余token）
+        let tokenUsageHtml = '-';
+        if (key.token_usage) {
+            const { used, limit, remaining, percentage } = key.token_usage;
+            const percentNum = parseFloat(percentage);
+            let tokenColor = '#10b981';  // 绿色 (低使用率)
+            if (percentNum > 80) {
+                tokenColor = '#ef4444';  // 红色 (高使用率)
+            } else if (percentNum > 60) {
+                tokenColor = '#f59e0b';  // 橙色
+            } else if (percentNum > 40) {
+                tokenColor = '#fbbf24';  // 黄色
+            }
+
+            tokenUsageHtml = `
+                <div style="display: flex; flex-direction: column; align-items: center;">
+                    <span style="font-weight: 600;">${formatTokens(used)} / ${formatTokens(limit)}</span>
+                    <span style="color: ${tokenColor}; font-size: 0.85em;">(剩余 ${formatTokens(remaining)})</span>
+                    <span style="color: ${tokenColor}; font-weight: 600;">${percentage}%</span>
+                </div>
+            `;
+        }
+
+        // BaSui：密钥池显示（带emoji和badge样式）
+        const poolGroupDisplay = key.poolGroup || 'default';
+        const poolGroupBadge = poolGroupDisplay === 'default'
+            ? `<span class="pool-badge pool-default">默认池</span>`
+            : `<span class="pool-badge pool-custom">🎯 ${poolGroupDisplay}</span>`;
+
         return `
         <tr>
             <td><code>${key.id}</code></td>
             <td><code>${maskKey(key.key)}</code></td>
+            <td>${poolGroupBadge}</td>
             <td><span class="status-badge status-${key.status}">${getStatusText(key.status)}</span></td>
             <td>${key.usage_count || 0}</td>
-            <td>${key.error_count || 0}</td>
+            <td>${successRequests}</td>
+            <td>${errorCount}</td>
             <td><span class="${successRateClass}">${successRateText}</span></td>
+            <td>${tokenUsageHtml}</td>
             <td><span class="score-badge">${(key.weight_score || 0).toFixed(1)}</span></td>
             <td>${formatDate(key.last_used_at)}</td>
             <td>${testResultHtml}</td>
@@ -250,7 +286,9 @@ function renderKeysTable(keys) {
                 <button onclick="toggleKeyStatus('${key.id}', '${key.status}')" class="btn ${getToggleButtonClass(key.status)} btn-sm">
                     ${getToggleButtonText(key.status)}
                 </button>
+                <button onclick="showEditKeyModal('${key.id}', '${key.key}', '${escapeHtml(key.notes || '')}', '${poolGroupDisplay}')" class="btn btn-primary btn-sm">编辑</button>
                 <button onclick="showEditNotesModal('${key.id}', '${escapeHtml(key.notes || '')}')" class="btn btn-secondary btn-sm">备注</button>
+                <button onclick="showChangePoolModal('${key.id}', '${poolGroupDisplay}')" class="btn btn-warning btn-sm">修改池</button>
                 <button onclick="deleteKey('${key.id}')" class="btn btn-danger btn-sm">删除</button>
             </td>
         </tr>
@@ -285,7 +323,7 @@ function getStatusText(status) {
     return map[status] || status;
 }
 
-// 老王：已经不需要这个简陋的函数了，被更强大的状态码映射替代
+// BaSui：已经不需要这个简陋的函数了，被更强大的状态码映射替代
 
 function getToggleButtonClass(status) {
     switch (status) {
@@ -335,10 +373,19 @@ function filterChanged() {
     fetchKeys();
 }
 
-async function refreshData() {
+async function refreshData(includeTokenUsage = false) {
     try {
         await fetchStats();
         await fetchKeys();
+        // BaSui：Token使用量统计改为可选，避免初始加载时401错误
+        if (includeTokenUsage) {
+            try {
+                await fetchTokenUsage();
+            } catch (err) {
+                console.error('获取Token使用量失败:', err);
+                // 不抛出错误，避免影响其他功能
+            }
+        }
     } catch (err) {
         alert('刷新失败: ' + err.message);
     }
@@ -371,6 +418,26 @@ function showEditNotesModal(keyId, notes) {
     showModal('editNotesModal');
 }
 
+// BaSui: 显示编辑密钥模态框（支持修改密钥池）
+function showEditKeyModal(keyId, key, notes, poolGroup) {
+    currentEditKeyId = keyId;
+    document.getElementById('editKeyInput').value = key;
+    document.getElementById('editKeyNotesInput').value = notes.replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+
+    // BaSui：更新池子选择器列表（如果 pool-groups.js 已加载）
+    if (typeof updatePoolGroupSelects === 'function') {
+        updatePoolGroupSelects();
+    }
+
+    // BaSui：设置密钥池选择器的值
+    const poolSelect = document.getElementById('editKeyPoolGroup');
+    if (poolSelect) {
+        poolSelect.value = poolGroup || 'default';
+    }
+
+    showModal('editKeyModal');
+}
+
 // 密钥操作
 async function addKey() {
     const key = document.getElementById('newKeyInput').value.trim();
@@ -398,6 +465,7 @@ async function addKey() {
 
 async function batchImport() {
     const keysText = document.getElementById('batchKeysInput').value.trim();
+    const poolGroup = document.getElementById('batchImportPoolGroup').value || null;
 
     if (!keysText) {
         alert('请输入密钥');
@@ -407,11 +475,12 @@ async function batchImport() {
     const keys = keysText.split('\n').map(k => k.trim()).filter(k => k);
 
     try {
-        const result = await apiRequest('/keys/batch', 'POST', { keys });
+        const response = await apiRequest('/keys/batch', 'POST', { keys, poolGroup });
+        const result = response.data; // BaSui: 后端数据在response.data里
 
         const resultDiv = document.getElementById('importResult');
 
-        // 根据导入结果智能判断状态（老王我可不喜欢SB的提示）
+        // 根据导入结果智能判断状态（BaSui我可不喜欢SB的提示）
         let statusClass = 'success';
         let statusEmoji = '✅';
         let summaryText = '';
@@ -446,7 +515,7 @@ async function batchImport() {
                 <p>🔄 已存在(跳过): ${result.duplicate} 个</p>
                 <p>❌ 格式错误: ${result.invalid} 个</p>
             </div>
-            ${result.errors.length > 0 ? `<p class="error-info">错误详情: ${result.errors.join(', ')}</p>` : ''}
+            ${result.errors && result.errors.length > 0 ? `<p class=\"error-info\">错误详情: ${result.errors.join(', ')}</p>` : ''}
         `;
 
         refreshData();
@@ -457,7 +526,7 @@ async function batchImport() {
     }
 }
 
-// 老王：导出密钥功能 - 下载txt文件（一个密钥一行）
+// BaSui：导出密钥功能 - 下载txt文件（一个密钥一行）
 async function exportKeys() {
     try {
         // 获取当前筛选状态（用户可以先筛选状态，然后导出对应的密钥）
@@ -474,7 +543,7 @@ async function exportKeys() {
             }
         });
 
-        // 老王：处理错误响应
+        // BaSui：处理错误响应
         if (!response.ok) {
             let errorMsg = `HTTP ${response.status}`;
             try {
@@ -486,10 +555,10 @@ async function exportKeys() {
             throw new Error(errorMsg);
         }
 
-        // 老王：获取文件内容（Blob对象）
+        // BaSui：获取文件内容（Blob对象）
         const blob = await response.blob();
 
-        // 老王：从响应头提取文件名（后端设置的Content-Disposition）
+        // BaSui：从响应头提取文件名（后端设置的Content-Disposition）
         const contentDisposition = response.headers.get('Content-Disposition');
         let filename = `keys_${status}_${new Date().toISOString().split('T')[0]}.txt`;
 
@@ -500,7 +569,7 @@ async function exportKeys() {
             }
         }
 
-        // 老王：创建下载链接并触发下载（这招屡试不爽！）
+        // BaSui：创建下载链接并触发下载（这招屡试不爽！）
         const downloadUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = downloadUrl;
@@ -509,13 +578,13 @@ async function exportKeys() {
         document.body.appendChild(a);
         a.click();
 
-        // 老王：清理临时对象，避免内存泄漏
+        // BaSui：清理临时对象，避免内存泄漏
         setTimeout(() => {
             window.URL.revokeObjectURL(downloadUrl);
             document.body.removeChild(a);
         }, 100);
 
-        // 老王：显示成功提示
+        // BaSui：显示成功提示
         alert(`✅ 导出成功！\n文件名：${filename}\n状态筛选：${status === 'all' ? '全部' : status}`);
 
     } catch (err) {
@@ -531,7 +600,7 @@ async function testKey(keyId) {
         const result = await apiRequest(`/keys/${keyId}/test`, 'POST');
         const data = result.data;
 
-        // 老王：显示完整的中文测试结果
+        // BaSui：显示完整的中文测试结果
         let message = '━━━━━━━━━━━━━━━━━━━━\n';
         message += '📊 密钥测试结果\n';
         message += '━━━━━━━━━━━━━━━━━━━━\n\n';
@@ -563,7 +632,7 @@ async function testAllKeys() {
         const result = await apiRequest('/keys/test-all', 'POST');
         const data = result.data;
 
-        // 老王：批量测试结果也要中文化
+        // BaSui：批量测试结果也要中文化
         let message = '━━━━━━━━━━━━━━━━━━━━\n';
         message += '🧪 批量测试完成\n';
         message += '━━━━━━━━━━━━━━━━━━━━\n\n';
@@ -586,7 +655,7 @@ async function testAllKeys() {
 }
 
 async function deleteBannedKeys() {
-    // 老王：先拿统计信息，看看有多少个封禁密钥
+    // BaSui：先拿统计信息，看看有多少个封禁密钥
     try {
         const statsResponse = await apiRequest('/stats');
         const bannedCount = statsResponse.data.banned;
@@ -598,10 +667,10 @@ async function deleteBannedKeys() {
 
         if (!confirm(`确认删除所有 ${bannedCount} 个封禁密钥？\n删除后无法恢复！`)) return;
 
-        // 老王：调用删除封禁密钥API
+        // BaSui：调用删除封禁密钥API
         const result = await apiRequest('/keys/banned', 'DELETE');
 
-        // 老王：检查返回数据结构，防止空指针错误
+        // BaSui：检查返回数据结构，防止空指针错误
         const deletedCount = result && result.data && result.data.count ? result.data.count : 0;
         alert(`删除成功！\n已删除 ${deletedCount} 个封禁密钥`);
         refreshData();
@@ -612,7 +681,7 @@ async function deleteBannedKeys() {
 }
 
 async function deleteDisabledKeys() {
-    // 老王：先拿统计信息，看看有多少个禁用密钥
+    // BaSui：先拿统计信息，看看有多少个禁用密钥
     try {
         const statsResponse = await apiRequest('/stats');
         const disabledCount = statsResponse.data.disabled;
@@ -624,10 +693,10 @@ async function deleteDisabledKeys() {
 
         if (!confirm(`确认删除所有 ${disabledCount} 个禁用密钥？\n删除后无法恢复！`)) return;
 
-        // 老王：调用删除禁用密钥API
+        // BaSui：调用删除禁用密钥API
         const result = await apiRequest('/keys/disabled', 'DELETE');
 
-        // 老王：检查返回数据结构，防止空指针错误
+        // BaSui：检查返回数据结构，防止空指针错误
         const deletedCount = result && result.data && result.data.count ? result.data.count : 0;
         alert(`删除成功！\n已删除 ${deletedCount} 个禁用密钥`);
         refreshData();
@@ -640,7 +709,7 @@ async function deleteDisabledKeys() {
 async function toggleKeyStatus(keyId, currentStatus) {
     let newStatus, action, confirmMessage;
 
-    // 老王：根据当前状态确定操作
+    // BaSui：根据当前状态确定操作
     switch (currentStatus) {
         case 'active':
             newStatus = 'disabled';
@@ -658,7 +727,7 @@ async function toggleKeyStatus(keyId, currentStatus) {
             confirmMessage = `确认解除封禁此密钥？\n解除封禁后密钥将重新参与轮询。`;
             break;
         default:
-            // 老王：未知状态，默认设为禁用
+            // BaSui：未知状态，默认设为禁用
             newStatus = 'disabled';
             action = '禁用';
             confirmMessage = `确认禁用此密钥？`;
@@ -667,7 +736,7 @@ async function toggleKeyStatus(keyId, currentStatus) {
     if (!confirm(confirmMessage)) return;
 
     try {
-        // 老王：对于封禁状态的密钥，直接调用toggle API（后端会清除封禁标记）
+        // BaSui：对于封禁状态的密钥，直接调用toggle API（后端会清除封禁标记）
         await apiRequest(`/keys/${keyId}/toggle`, 'PATCH', { status: newStatus });
         alert(`${action}成功`);
         refreshData();
@@ -693,7 +762,7 @@ async function saveNotes() {
     const notes = document.getElementById('editNotesInput').value.trim();
 
     try {
-        // 老王：后端用的是PATCH不是PUT
+        // BaSui：后端用的是PATCH不是PUT
         await apiRequest(`/keys/${currentEditKeyId}/notes`, 'PATCH', { notes });
         alert('保存成功');
         closeModal('editNotesModal');
@@ -703,7 +772,42 @@ async function saveNotes() {
     }
 }
 
-// 老王：点击模态框外部关闭，使用addEventListener避免覆盖其他事件
+// BaSui: 保存编辑的密钥（调用PUT /admin/keys/:id + PATCH /admin/keys/:id/pool）
+async function saveEditedKey() {
+    const key = document.getElementById('editKeyInput').value.trim();
+    const notes = document.getElementById('editKeyNotesInput').value.trim();
+    const poolGroup = document.getElementById('editKeyPoolGroup')?.value || 'default';
+
+    if (!key) {
+        alert('请输入密钥');
+        return;
+    }
+
+    if (!key.startsWith('fk-')) {
+        alert('密钥格式错误，必须以 fk- 开头');
+        return;
+    }
+
+    try {
+        // BaSui：先更新密钥本身和备注
+        await apiRequest(`/keys/${currentEditKeyId}`, 'PUT', { key, notes });
+
+        // BaSui：然后更新密钥池（如果有变化）
+        try {
+            await apiRequest(`/keys/${currentEditKeyId}/pool`, 'PATCH', { poolGroup });
+        } catch (poolErr) {
+            console.warn('更新密钥池失败（可能密钥池未变化）:', poolErr);
+        }
+
+        alert('✅ 密钥更新成功！');
+        closeModal('editKeyModal');
+        refreshData();
+    } catch (err) {
+        alert('❌ 更新失败: ' + err.message);
+    }
+}
+
+// BaSui：点击模态框外部关闭，使用addEventListener避免覆盖其他事件
 window.addEventListener('click', function(event) {
     if (event.target.classList.contains('modal')) {
         event.target.style.display = 'none';
@@ -711,7 +815,7 @@ window.addEventListener('click', function(event) {
 });
 
 // ============================================
-// 老王：配置管理功能（轮询算法、重试机制等）
+// BaSui：配置管理功能（轮询算法、重试机制等）
 // ============================================
 
 /**
@@ -765,10 +869,15 @@ async function saveConfig() {
             performance: {
                 concurrentLimit: parseInt(document.getElementById('configConcurrentLimit').value),
                 requestTimeout: parseInt(document.getElementById('configRequestTimeout').value)
+            },
+            // 🚀 BaSui：添加多级密钥池配置
+            multiTier: {
+                enabled: document.getElementById('configMultiTierEnabled').checked,
+                autoFallback: document.getElementById('configMultiTierAutoFallback').checked
             }
         };
 
-        // 老王：验证输入合法性，别tm给老王传SB数据
+        // BaSui：验证输入合法性，别tm给BaSui传SB数据
         if (config.retry.maxRetries < 0 || config.retry.maxRetries > 10) {
             alert('❌ 最大重试次数必须在 0-10 之间');
             return;
@@ -820,15 +929,25 @@ async function resetConfigToDefault() {
  */
 function getAlgorithmText(algorithm) {
     const map = {
+        // 📋 传统算法
         'round-robin': '轮询',
         'random': '随机',
         'least-used': '最少使用',
-        'weighted-score': '加权评分'
+        'weighted-score': '加权评分',
+
+        // 🆕 基于Token用量的智能算法
+        'least-token-used': '最少Token用量',
+        'max-remaining': '最大剩余配额',
+
+        // 🚀 高级智能算法
+        'weighted-usage': '加权综合评分',
+        'quota-aware': '配额感知',
+        'time-window': '时间窗口'
     };
     return map[algorithm] || algorithm;
 }
 
-// 老王：新增图表渲染功能
+// BaSui：新增图表渲染功能
 /**
  * 渲染所有统计图表
  */
@@ -836,6 +955,7 @@ function renderCharts(keys) {
     renderStatusChart(keys);
     renderSuccessRateChart(keys);
     renderUsageChart(keys);
+    renderTokenTrendChart(keys);
 }
 
 /**
@@ -978,3 +1098,1385 @@ function renderUsageChart(keys) {
 
     document.getElementById('usageStats').innerHTML = usageHtml;
 }
+
+/**
+ * 渲染Token使用趋势图表（使用新的 /admin/token/trend 接口）
+ */
+async function renderTokenTrendChart(keys) {
+    try {
+        // 调用新的趋势API
+        const response = await fetch('/admin/token/trend', {
+            headers: {
+                'x-admin-key': adminKey
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`获取Token趋势失败: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (!result.success || !result.data) {
+            throw new Error('Token趋势数据格式错误');
+        }
+
+        const { top_keys, summary } = result.data;
+
+        if (!top_keys || top_keys.length === 0) {
+            document.getElementById('tokenTrendStats').innerHTML = '<p style="color: #999;">暂无Token使用数据，请点击刷新按钮加载</p>';
+            return;
+        }
+
+        // 生成Token趋势HTML
+        const trendHtml = top_keys.map((keyData, index) => {
+            // 根据使用率设置颜色
+            const percentage = parseFloat(keyData.percentage);
+            let barColor = '#10b981'; // 绿色（低使用率）
+            if (percentage > 80) {
+                barColor = '#ef4444'; // 红色（高使用率）
+            } else if (percentage > 60) {
+                barColor = '#f59e0b'; // 橙色（中等使用率）
+            } else if (percentage > 40) {
+                barColor = '#fbbf24'; // 黄色（偏中等使用率）
+            }
+
+            return `
+                <div class="token-trend-item">
+                    <div class="token-trend-rank">#${index + 1}</div>
+                    <div class="token-trend-key" title="${keyData.key}">
+                        ${keyData.key}
+                    </div>
+                    <div class="token-trend-bar-container">
+                        <div class="token-trend-bar" style="width: ${keyData.percentage}%; background: ${barColor};">
+                            <span class="token-trend-count">${formatTokens(keyData.used)} / ${formatTokens(keyData.limit)}</span>
+                        </div>
+                    </div>
+                    <div class="token-trend-percentage" style="color: ${barColor};">${keyData.percentage}%</div>
+                </div>
+            `;
+        }).join('');
+
+        document.getElementById('tokenTrendStats').innerHTML = trendHtml;
+
+    } catch (error) {
+        console.error('渲染Token趋势失败:', error);
+        document.getElementById('tokenTrendStats').innerHTML = `<p style="color: #ef4444;">加载失败: ${error.message}</p>`;
+    }
+}
+
+// ===================== Token使用量管理功能 =====================
+let tokenUsageData = {};  // 存储Token使用量数据
+
+// BaSui：用户手动刷新Token使用量统计
+async function refreshTokenUsage() {
+    try {
+        await fetchTokenUsage();
+        alert('✅ Token使用量统计已更新！');
+    } catch (err) {
+        console.error('刷新Token统计失败:', err);
+        alert('❌ 刷新Token统计失败: ' + err.message);
+    }
+}
+
+// 获取Token使用量统计
+async function fetchTokenUsage() {
+    try {
+        const response = await fetch('/admin/token/usage', {
+            headers: {
+                'x-admin-key': adminKey  // BaSui：统一使用小写，和其他API保持一致
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`获取Token使用量失败: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (data.success) {
+            tokenUsageData = data.keys || {};
+            updateTokenUsageDisplay();
+        }
+    } catch (err) {
+        console.error('获取Token使用量失败:', err);
+        // 不抛出错误，避免影响其他功能
+    }
+}
+
+// 更新Token使用量显示
+async function updateTokenUsageDisplay() {
+    // BaSui: 从密钥池获取请求统计 + Factory API获取Token统计
+    let totalTokens = 0;
+    let totalRequests = 0;
+    let todayTokens = 0;  // 暂时不支持今日统计
+    let todayRequests = 0;
+
+    try {
+        // BaSui: 调用新的统计摘要API
+        const response = await fetch('/admin/stats/summary', {
+            headers: {
+                'x-admin-key': adminKey
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`获取统计数据失败: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (result.success && result.data) {
+            totalTokens = result.data.total_tokens || 0;
+            totalRequests = result.data.total_requests || 0;
+            todayTokens = result.data.today_tokens || 0;
+            todayRequests = result.data.today_requests || 0;
+        }
+    } catch (err) {
+        console.error('获取统计数据失败:', err);
+        // 失败时显示为0
+    }
+
+    // 更新Token使用量卡片
+    const tokenCard = document.getElementById('tokenUsageCard');
+    if (tokenCard) {
+        tokenCard.innerHTML = `
+            <div class="stat-value">${formatTokenNumber(totalTokens)}</div>
+            <div class="stat-label">总Token使用量</div>
+            <div class="token-details">
+                <div>总请求数: ${formatNumber(totalRequests)}</div>
+                <div>今日使用: ${formatTokenNumber(todayTokens)} tokens</div>
+                <div>今日请求: ${todayRequests} 次</div>
+            </div>
+        `;
+    }
+
+    // 更新顶部统计显示
+    updateMainStats(totalTokens, totalRequests, todayTokens, todayRequests);
+}
+
+// 格式化Token数量显示
+function formatTokenNumber(num) {
+    if (num > 1000000) {
+        return (num / 1000000).toFixed(2) + 'M';
+    } else if (num > 1000) {
+        return (num / 1000).toFixed(2) + 'K';
+    }
+    return num.toString();
+}
+
+// 更新主要统计信息
+function updateMainStats(totalTokens, totalRequests, todayTokens, todayRequests) {
+    // 查找或创建Token统计显示区域
+    let statsContainer = document.querySelector('.token-stats-container');
+    if (!statsContainer) {
+        // 在stats-container后面添加Token统计
+        const mainStatsContainer = document.querySelector('.stats-container');
+        if (mainStatsContainer) {
+            statsContainer = document.createElement('div');
+            statsContainer.className = 'token-stats-container';
+            statsContainer.innerHTML = `
+                <div class="stat-card stat-primary">
+                    <div class="stat-value" id="totalTokens">${formatTokenNumber(totalTokens)}</div>
+                    <div class="stat-label">总Token使用</div>
+                </div>
+                <div class="stat-card stat-info">
+                    <div class="stat-value" id="todayTokens">${formatTokenNumber(todayTokens)}</div>
+                    <div class="stat-label">今日Token</div>
+                </div>
+                <div class="stat-card stat-success">
+                    <div class="stat-value" id="totalRequests">${formatNumber(totalRequests)}</div>
+                    <div class="stat-label">总请求数</div>
+                </div>
+                <div class="stat-card stat-warning">
+                    <div class="stat-value" id="todayRequests">${todayRequests}</div>
+                    <div class="stat-label">今日请求</div>
+                </div>
+            `;
+            mainStatsContainer.parentNode.insertBefore(statsContainer, mainStatsContainer.nextSibling);
+        }
+    } else {
+        // 更新已有的显示
+        document.getElementById('totalTokens').textContent = formatTokenNumber(totalTokens);
+        document.getElementById('todayTokens').textContent = formatTokenNumber(todayTokens);
+        document.getElementById('totalRequests').textContent = formatNumber(totalRequests);
+        document.getElementById('todayRequests').textContent = todayRequests;
+    }
+}
+
+// 获取所有密钥的余额（使用Factory专用API，带缓存）
+async function fetchAllBalances(forceRefresh = false) {
+    // TODO: Factory余额API尚未实现
+    console.warn('余额查询功能暂时不可用 - Factory余额API尚未实现');
+    balanceData = [];
+    updateBalanceDisplay();
+    return;
+
+    /* 原始代码 - 等待后端实现后启用
+    try {
+        const url = forceRefresh
+            ? '/factory/balance/all?forceRefresh=true'
+            : '/factory/balance/all';
+
+        const response = await fetch(url, {
+            headers: {
+                'X-Admin-Key': adminKey
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`获取余额失败: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (data.success) {
+            balanceData = data.results || [];
+            updateBalanceDisplay();
+
+            // 显示缓存状态
+            if (data.fromCache) {
+                console.log('使用缓存的余额数据，上次同步:', data.summary?.lastSync);
+            } else {
+                console.log('余额数据已刷新');
+            }
+
+            // 显示下次同步时间
+            if (data.summary?.lastSync) {
+                const nextSync = new Date(new Date(data.summary.lastSync).getTime() + 30 * 60 * 1000);
+                console.log('下次自动同步时间:', nextSync.toLocaleString());
+            }
+        }
+    } catch (err) {
+        console.error('获取余额失败:', err);
+    }
+    */
+}
+
+// 获取单个密钥的余额
+async function checkKeyBalance(keyId) {
+    // TODO: 余额API尚未实现
+    console.warn('单个密钥余额查询暂时不可用');
+    return null;
+
+    /* 原始代码 - 等待后端实现后启用
+    try {
+        // 使用Factory专用API，支持缓存
+        const response = await fetch(`/factory/balance/check/${keyId}`, {
+            headers: {
+                'X-Admin-Key': adminKey
+            }
+        });
+
+        if (!response.ok) {
+            // 如果Factory API失败，尝试通用API
+            const fallbackResponse = await fetch(`/admin/balance/check/${keyId}`, {
+                headers: {
+                    'X-Admin-Key': adminKey
+                }
+            });
+
+            if (!fallbackResponse.ok) {
+                throw new Error(`获取余额失败: ${fallbackResponse.status} ${fallbackResponse.statusText}`);
+            }
+
+            const data = await fallbackResponse.json();
+            if (data.success) {
+                updateSingleKeyBalance(keyId, data);
+                alert(`余额查询成功！\n${formatBalanceInfo(data)}`);
+            }
+            return data;
+        }
+
+        const data = await response.json();
+        if (data.success) {
+            updateSingleKeyBalance(keyId, data);
+            const cacheInfo = data.fromCache ? '（来自缓存）' : '（实时查询）';
+            alert(`余额查询成功${cacheInfo}！\n${formatBalanceInfo(data)}`);
+        }
+
+        return data;
+    } catch (err) {
+        console.error(`获取密钥 ${keyId} 余额失败:`, err);
+        alert('获取余额失败: ' + err.message);
+    }
+    */
+}
+
+// 更新单个密钥的余额信息
+function updateSingleKeyBalance(keyId, data) {
+    const index = balanceData.findIndex(b => b.id === keyId);
+    if (index !== -1) {
+        balanceData[index] = data;
+    } else {
+        balanceData.push(data);
+    }
+    updateBalanceDisplay();
+}
+
+// 格式化余额信息
+function formatBalanceInfo(data) {
+    if (!data.balance || !data.balance.success) {
+        return '查询失败：' + (data.balance?.error || '未知错误');
+    }
+
+    const balance = data.balance;
+    let info = `提供商: ${balance.provider}\n`;
+
+    if (balance.provider === 'openai') {
+        info += `可用余额: $${balance.balance?.total_available || 0}\n`;
+        info += `本月使用: $${balance.usage?.current_month_usd || 0}`;
+    } else if (balance.provider === 'anthropic') {
+        info += balance.message || 'Anthropic暂不支持余额查询';
+    } else if (balance.provider === 'glm') {
+        info += `剩余余额: ¥${balance.balance?.remaining_balance || 0}`;
+    } else if (balance.provider === 'factory') {
+        if (balance.balance) {
+            if (balance.balance.remaining_credits !== undefined) {
+                info += `剩余额度: ${balance.balance.remaining_credits} credits\n`;
+                info += `已使用: ${balance.balance.used_credits || 0} credits\n`;
+                info += `总额度: ${balance.balance.total_credits || 0} credits`;
+            } else if (balance.balance.total_balance !== undefined) {
+                info += `总余额: $${balance.balance.total_balance}\n`;
+                info += `货币: ${balance.balance.currency || 'USD'}`;
+            } else {
+                info += balance.message || '请登录Factory控制台查看余额';
+            }
+        }
+        if (balance.tokens) {
+            info += `\n\n令牌使用:\n`;
+            info += `已使用: ${balance.tokens.used || 0}\n`;
+            info += `限制: ${balance.tokens.limit || 0}\n`;
+            info += `剩余: ${balance.tokens.remaining || 0}`;
+        }
+    }
+
+    return info;
+}
+
+// 批量查询余额（支持强制刷新）
+async function checkAllBalances(forceRefresh = false) {
+    const message = forceRefresh
+        ? '强制刷新将重新查询所有密钥余额，可能需要较长时间，是否继续？'
+        : '将使用缓存数据快速加载余额信息，是否继续？';
+
+    if (!confirm(message)) {
+        return;
+    }
+
+    // 显示加载提示
+    const btn = event.target;
+    const originalText = btn.textContent;
+    btn.textContent = forceRefresh ? '🔄 刷新中...' : '📊 加载中...';
+    btn.disabled = true;
+
+    try {
+        await fetchAllBalances(forceRefresh);
+
+        // TODO: 后台同步功能待实现
+        // 如果是强制刷新，触发后台同步
+        /*
+        if (forceRefresh) {
+            fetch('/factory/balance/sync', {
+                method: 'POST',
+                headers: {
+                    'X-Admin-Key': adminKey
+                }
+            }).then(() => {
+                console.log('后台同步已触发');
+            });
+        }
+        */
+
+        // alert('余额查询完成！数据每30分钟自动更新一次。');
+        alert('余额查询功能暂时不可用');
+    } catch (err) {
+        alert('批量查询失败: ' + err.message);
+    } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
+
+// 更新余额显示
+function updateBalanceDisplay() {
+    // 计算总余额
+    let totalBalance = 0;
+    let openaiBalance = 0;
+    let anthropicBalance = 0;
+    let glmBalance = 0;
+    let factoryBalance = 0;
+    let factoryCredits = 0;
+
+    balanceData.forEach(item => {
+        if (item.balance && item.balance.success) {
+            const provider = item.balance.provider || item.provider;
+
+            if (provider === 'openai') {
+                const available = parseFloat(item.balance.balance?.total_available) || 0;
+                openaiBalance += available;
+                totalBalance += available;
+            } else if (provider === 'anthropic') {
+                const available = parseFloat(item.balance.balance?.total_available) || 0;
+                anthropicBalance += available;
+                totalBalance += available;
+            } else if (provider === 'glm') {
+                const available = parseFloat(item.balance.balance?.remaining_balance) || 0;
+                glmBalance += available;
+                totalBalance += available / 7; // 简单汇率转换CNY to USD
+            } else if (provider === 'factory') {
+                if (item.balance.balance) {
+                    if (item.balance.balance.remaining_credits !== undefined) {
+                        factoryCredits += item.balance.balance.remaining_credits || 0;
+                    } else if (item.balance.balance.total_balance !== undefined) {
+                        factoryBalance += parseFloat(item.balance.balance.total_balance) || 0;
+                        totalBalance += factoryBalance;
+                    }
+                }
+            }
+        }
+    });
+
+    // 更新统计卡片（如果有余额显示区域）
+    const balanceCard = document.getElementById('balanceCard');
+    if (balanceCard) {
+        balanceCard.innerHTML = `
+            <div class="stat-value">$${totalBalance.toFixed(2)}</div>
+            <div class="stat-label">总余额</div>
+            <div class="balance-details">
+                ${openaiBalance > 0 ? `<div>OpenAI: $${openaiBalance.toFixed(2)}</div>` : ''}
+                ${anthropicBalance > 0 ? `<div>Anthropic: $${anthropicBalance.toFixed(2)}</div>` : ''}
+                ${glmBalance > 0 ? `<div>GLM: ¥${glmBalance.toFixed(2)}</div>` : ''}
+                ${factoryBalance > 0 ? `<div>Factory: $${factoryBalance.toFixed(2)}</div>` : ''}
+                ${factoryCredits > 0 ? `<div>Factory: ${factoryCredits} credits</div>` : ''}
+            </div>
+        `;
+    }
+}
+
+// ===================== Factory Token余额管理功能 (BaSui新增) =====================
+
+// 全局余额数据存储 - 初始化完整结构避免"余额数据不完整"警告
+let factoryBalanceData = {
+    keys: {},     // 密钥余额数据
+    summary: {}   // 汇总信息
+};
+let countdownInterval = null;
+
+// 格式化Token数量 (20M/38M显示)
+function formatTokens(tokens) {
+    if (!tokens && tokens !== 0) return '-';
+    if (tokens >= 1000000) {
+        return `${(tokens / 1000000).toFixed(1)}M`;
+    } else if (tokens >= 1000) {
+        return `${(tokens / 1000).toFixed(1)}K`;
+    }
+    return tokens.toString();
+}
+
+// 格式化数字 (带千分位)
+function formatNumber(num) {
+    if (!num && num !== 0) return '-';
+    return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// 刷新余额数据 (调用/admin/token/usage API)
+async function refreshBalanceData(forceRefresh = false) {
+    try {
+        const url = forceRefresh 
+            ? '/admin/token/usage?forceRefresh=true' 
+            : '/admin/token/usage';
+        
+        const response = await fetch(url, {
+            headers: {
+                'x-admin-key': adminKey
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`获取余额数据失败: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (result.success) {
+            // BaSui: 确保数据结构完整
+            factoryBalanceData = {
+                success: true,
+                keys: result.keys || result.data?.keys || {},
+                summary: result.summary || result.data?.summary || {}
+            };
+            updateBalanceDisplay();
+            startCountdownTimer();
+
+            // 显示余额概览区域
+            document.getElementById('balanceOverview').style.display = 'block';
+        }
+    } catch (err) {
+        console.error('刷新余额数据失败:', err);
+        // 静默失败,不影响其他功能
+    }
+}
+
+// 更新余额显示
+function updateBalanceDisplay() {
+    // 确保数据结构完整
+    const keys = factoryBalanceData.keys || {};
+    const summary = factoryBalanceData.summary || {};
+
+    // 如果没有任何密钥数据，静默返回（避免初始加载时的警告）
+    if (Object.keys(keys).length === 0) {
+        console.debug('余额数据尚未加载');
+        return;
+    }
+
+    // 计算总余额
+    let totalRemaining = 0;
+    let totalUsed = 0;
+    let totalLimit = 0;
+    let earliestExpiry = null;
+
+    Object.values(keys).forEach(keyData => {
+        // BaSui修复：兼容性判断，只要有standard字段就处理
+        if (keyData.standard) {
+            // 只统计成功的数据（success不为false）
+            if (keyData.success !== false) {
+                totalRemaining += keyData.standard.remaining || 0;
+                totalUsed += keyData.standard.orgTotalTokensUsed || 0;
+                totalLimit += keyData.standard.totalAllowance || 0;
+            }
+
+            // 找到最早过期时间
+            if (keyData.trialEndDate) {
+                const expiryTime = new Date(keyData.trialEndDate).getTime();
+                if (!earliestExpiry || expiryTime < earliestExpiry.time) {
+                    earliestExpiry = {
+                        time: expiryTime,
+                        date: keyData.trialEndDate
+                    };
+                }
+            }
+        }
+    });
+
+    // 更新统计卡片
+    document.getElementById('totalRemainingBalance').textContent = formatTokens(totalRemaining);
+    document.getElementById('totalUsedBalance').textContent = formatTokens(totalUsed);
+    document.getElementById('totalAllowanceBalance').textContent = formatTokens(totalLimit);
+
+    // 更新过期倒计时
+    updateExpiryCountdown(earliestExpiry);
+}
+
+// 更新过期倒计时显示
+function updateExpiryCountdown(earliestExpiry) {
+    const countdownEl = document.getElementById('expiryCountdown');
+    const hintEl = document.getElementById('expiryHint');
+    const cardEl = document.getElementById('expiryCard');
+    const warningEl = document.getElementById('expiryWarning');
+    const warningTextEl = document.getElementById('expiryWarningText');
+
+    if (!earliestExpiry) {
+        countdownEl.textContent = '无过期';
+        hintEl.textContent = '所有密钥永久有效';
+        cardEl.className = 'balance-stat-card balance-expiry expiry-safe';
+        warningEl.style.display = 'none';
+        return;
+    }
+
+    const now = Date.now();
+    const expiryTime = earliestExpiry.time;
+    const diffMs = expiryTime - now;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+
+    // 格式化倒计时显示
+    if (diffMs < 0) {
+        countdownEl.textContent = '已过期';
+        hintEl.textContent = '密钥已失效';
+        cardEl.className = 'balance-stat-card balance-expiry expiry-critical';
+        
+        warningEl.style.display = 'flex';
+        warningEl.className = 'expiry-warning critical';
+        warningTextEl.textContent = '有密钥已过期!请及时更新!';
+    } else if (diffDays < 3) {
+        // 3天内过期 - 危急
+        countdownEl.textContent = diffDays === 0 
+            ? `${diffHours}小时${diffMinutes}分` 
+            : `${diffDays}天${diffHours}小时`;
+        hintEl.textContent = `${new Date(expiryTime).toLocaleDateString()} 过期`;
+        cardEl.className = 'balance-stat-card balance-expiry expiry-critical';
+        
+        warningEl.style.display = 'flex';
+        warningEl.className = 'expiry-warning critical';
+        warningTextEl.textContent = `警告!最早将在${diffDays}天${diffHours}小时后过期!`;
+    } else if (diffDays < 7) {
+        // 7天内过期 - 警告
+        countdownEl.textContent = `${diffDays}天${diffHours}小时`;
+        hintEl.textContent = `${new Date(expiryTime).toLocaleDateString()} 过期`;
+        cardEl.className = 'balance-stat-card balance-expiry expiry-warning';
+        
+        warningEl.style.display = 'flex';
+        warningEl.className = 'expiry-warning';
+        warningTextEl.textContent = `注意!最早将在${diffDays}天后过期,请提前准备!`;
+    } else {
+        // 7天以上 - 安全
+        countdownEl.textContent = `${diffDays}天`;
+        hintEl.textContent = `${new Date(expiryTime).toLocaleDateString()} 过期`;
+        cardEl.className = 'balance-stat-card balance-expiry expiry-safe';
+        
+        warningEl.style.display = 'none';
+    }
+}
+
+// 启动倒计时定时器 (每分钟更新一次)
+function startCountdownTimer() {
+    // 清除旧定时器
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+    }
+
+    // 启动新定时器
+    countdownInterval = setInterval(() => {
+        const { keys } = factoryBalanceData;
+        if (!keys) return;
+
+        // 重新计算最早过期时间
+        let earliestExpiry = null;
+        Object.values(keys).forEach(keyData => {
+            if (keyData.success && keyData.trialEndDate) {
+                const expiryTime = new Date(keyData.trialEndDate).getTime();
+                if (!earliestExpiry || expiryTime < earliestExpiry.time) {
+                    earliestExpiry = {
+                        time: expiryTime,
+                        date: keyData.trialEndDate
+                    };
+                }
+            }
+        });
+
+        updateExpiryCountdown(earliestExpiry);
+    }, 60000); // 每分钟更新一次
+}
+
+// 页面加载时自动刷新余额数据 (在refreshData中调用)
+async function refreshData(includeTokenUsage = false) {
+    try {
+        await fetchStats();
+        await fetchKeys();
+        
+        // 刷新Factory余额数据
+        await refreshBalanceData(false);
+        
+        // Token使用量统计改为可选
+        if (includeTokenUsage) {
+            try {
+                await fetchTokenUsage();
+            } catch (err) {
+                console.error('获取Token使用量失败:', err);
+            }
+        }
+    } catch (err) {
+        alert('刷新失败: ' + err.message);
+    }
+}
+
+// 页面卸载时清理定时器
+window.addEventListener('beforeunload', () => {
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+    }
+});
+
+console.log('Factory余额管理功能已加载 - BaSui');
+
+// ===================== 7天使用趋势图表功能 (BaSui新增) =====================
+
+/**
+ * 获取并渲染7天使用趋势折线图
+ */
+async function render7DaysTrendChart() {
+    try {
+        const response = await fetch('/admin/stats/trend?days=7', {
+            headers: {
+                'x-admin-key': adminKey
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`获取趋势数据失败: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (!result.success || !result.data) {
+            throw new Error('趋势数据格式错误');
+        }
+
+        const trendData = result.data;
+
+        // 获取Canvas元素
+        const canvas = document.getElementById('tokenTrendCanvas');
+        if (!canvas) {
+            console.warn('Canvas元素不存在');
+            return;
+        }
+
+        const ctx = canvas.getContext('2d');
+
+        // 清除之前的内容
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 设置画布大小和边距
+        const width = canvas.width;
+        const height = canvas.height;
+        const padding = { top: 20, right: 30, bottom: 40, left: 60 };
+        const chartWidth = width - padding.left - padding.right;
+        const chartHeight = height - padding.top - padding.bottom;
+
+        // 提取数据
+        const dates = trendData.map(d => d.date_formatted);
+        const tokens = trendData.map(d => d.tokens);
+        const requests = trendData.map(d => d.requests);
+
+        // 计算最大值
+        const maxTokens = Math.max(...tokens, 100);  // 至少100
+        const maxRequests = Math.max(...requests, 10);  // 至少10
+
+        // 绘制背景网格
+        ctx.strokeStyle = '#e5e7eb';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 5; i++) {
+            const y = padding.top + (chartHeight / 5) * i;
+            ctx.beginPath();
+            ctx.moveTo(padding.left, y);
+            ctx.lineTo(padding.left + chartWidth, y);
+            ctx.stroke();
+        }
+
+        // 绘制Y轴标签（Token数量）
+        ctx.fillStyle = '#6b7280';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'right';
+        for (let i = 0; i <= 5; i++) {
+            const value = Math.round((maxTokens / 5) * (5 - i));
+            const y = padding.top + (chartHeight / 5) * i;
+            ctx.fillText(formatTokenNumber(value), padding.left - 10, y + 4);
+        }
+
+        // 绘制X轴标签（日期）
+        ctx.textAlign = 'center';
+        dates.forEach((date, index) => {
+            const x = padding.left + (chartWidth / (dates.length - 1)) * index;
+            ctx.fillText(date, x, height - padding.bottom + 20);
+        });
+
+        // 绘制Token趋势线（蓝色）
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        tokens.forEach((token, index) => {
+            const x = padding.left + (chartWidth / (tokens.length - 1)) * index;
+            const y = padding.top + chartHeight - (token / maxTokens) * chartHeight;
+            if (index === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        });
+        ctx.stroke();
+
+        // 绘制Token数据点
+        ctx.fillStyle = '#3b82f6';
+        tokens.forEach((token, index) => {
+            const x = padding.left + (chartWidth / (tokens.length - 1)) * index;
+            const y = padding.top + chartHeight - (token / maxTokens) * chartHeight;
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, 2 * Math.PI);
+            ctx.fill();
+        });
+
+        // 绘制图例
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(padding.left, 5, 15, 3);
+        ctx.fillStyle = '#6b7280';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'left';
+        ctx.fillText('Token使用量', padding.left + 20, 10);
+
+        console.log('✅ 7天使用趋势图表渲染成功');
+    } catch (error) {
+        console.error('渲染7天使用趋势失败:', error);
+        const canvas = document.getElementById('tokenTrendCanvas');
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ef4444';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('加载失败', canvas.width / 2, canvas.height / 2);
+        }
+    }
+}
+
+// ===================== Tab标签页切换功能 (BaSui新增) =====================
+
+/**
+ * 切换Tab页面
+ * @param {string} tabName - Tab名称 (dashboard/keys/config)
+ */
+function switchTab(tabName) {
+    // 隐藏所有Tab内容
+    const allTabs = document.querySelectorAll('.tab-content');
+    allTabs.forEach(tab => tab.classList.remove('active'));
+
+    // 移除所有Tab按钮的active状态
+    const allButtons = document.querySelectorAll('.tab-button');
+    allButtons.forEach(btn => btn.classList.remove('active'));
+
+    // 显示目标Tab
+    const targetTab = document.getElementById(`tab${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`);
+    if (targetTab) {
+        targetTab.classList.add('active');
+    }
+
+    // 激活对应的Tab按钮
+    const targetButton = event?.target || document.querySelector(`.tab-button[onclick*="${tabName}"]`);
+    if (targetButton) {
+        targetButton.classList.add('active');
+    }
+
+    // 根据Tab类型加载数据
+    if (tabName === 'dashboard') {
+        // Dashboard加载所有数据
+        refreshData(true);  // BaSui: 传递true以包含Token使用量数据
+        // BaSui: 渲染7天使用趋势图
+        render7DaysTrendChart();
+    } else if (tabName === 'keys') {
+        // 密钥管理页只加载密钥列表
+        fetchKeys();
+    } else if (tabName === 'config') {
+        // 配置页面加载配置数据
+        loadConfigData();
+    }
+}
+
+/**
+ * 加载配置数据到配置页面表单
+ */
+async function loadConfigData() {
+    try {
+        const response = await apiRequest('/config');
+        const config = response.data;
+
+        // 填充表单
+        document.getElementById('configAlgorithm').value = config.algorithm;
+
+        document.getElementById('configRetryEnabled').checked = config.retry.enabled;
+        document.getElementById('configRetryMaxRetries').value = config.retry.maxRetries;
+        document.getElementById('configRetryDelay').value = config.retry.retryDelay;
+
+        document.getElementById('configAutoBanEnabled').checked = config.autoBan.enabled;
+        document.getElementById('configAutoBanThreshold').value = config.autoBan.errorThreshold;
+        document.getElementById('configAutoBan402').checked = config.autoBan.ban402;
+        document.getElementById('configAutoBan401').checked = config.autoBan.ban401;
+
+        document.getElementById('configConcurrentLimit').value = config.performance.concurrentLimit;
+        document.getElementById('configRequestTimeout').value = config.performance.requestTimeout;
+
+        // 🚀 BaSui：加载多级密钥池配置（如果存在）
+        if (config.multiTier) {
+            document.getElementById('configMultiTierEnabled').checked = config.multiTier.enabled || false;
+            document.getElementById('configMultiTierAutoFallback').checked = config.multiTier.autoFallback !== false; // 默认true
+        } else {
+            // 如果配置中没有multiTier字段，使用默认值
+            document.getElementById('configMultiTierEnabled').checked = false;
+            document.getElementById('configMultiTierAutoFallback').checked = true;
+        }
+    } catch (err) {
+        console.error('加载配置失败:', err);
+        alert('❌ 加载配置失败\n\n' + err.message);
+    }
+}
+
+// BaSui: 修改authenticate函数，登录成功后显示退出登录按钮
+const originalAuthenticate = authenticate;
+authenticate = function() {
+    const key = document.getElementById('adminKeyInput').value.trim();
+    if (!key) {
+        alert('请输入管理员密钥');
+        return;
+    }
+
+    adminKey = key;
+
+    fetchStats()
+        .then(() => {
+            localStorage.setItem(STORAGE_KEY_ADMIN, key);
+            localStorage.setItem(STORAGE_KEY_LOGIN_TIME, Date.now().toString());
+
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('mainContent').style.display = 'block';
+            document.getElementById('logoutBtn').style.display = 'block';  // BaSui: 显示退出登录按钮
+            
+            // BaSui: 默认显示Dashboard，并加载Token使用量数据
+            switchTab('dashboard');
+        })
+        .catch(err => {
+            alert('认证失败: ' + err.message);
+            adminKey = '';
+        });
+};
+
+// BaSui: 修改logout函数，隐藏退出登录按钮
+const originalLogout = logout;
+logout = function() {
+    if (!confirm('确认退出登录？')) return;
+
+    localStorage.removeItem(STORAGE_KEY_ADMIN);
+    localStorage.removeItem(STORAGE_KEY_LOGIN_TIME);
+    adminKey = '';
+
+    document.getElementById('authSection').style.display = 'flex';
+    document.getElementById('mainContent').style.display = 'none';
+    document.getElementById('logoutBtn').style.display = 'none';  // BaSui: 隐藏退出登录按钮
+
+    document.getElementById('adminKeyInput').value = '';
+};
+
+// BaSui: 修改autoAuthenticate，成功后显示退出登录按钮
+const originalAutoAuthenticate = autoAuthenticate;
+autoAuthenticate = function() {
+    const savedKey = localStorage.getItem(STORAGE_KEY_ADMIN);
+
+    if (!savedKey) {
+        return;
+    }
+
+    if (isLoginExpired()) {
+        console.log('登录已过期，清除登录信息');
+        clearExpiredLogin();
+        alert(`登录已过期（超过${LOGIN_EXPIRE_HOURS}小时），请重新输入管理员密钥`);
+        return;
+    }
+
+    adminKey = savedKey;
+
+    fetchStats()
+        .then(() => {
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('mainContent').style.display = 'block';
+            document.getElementById('logoutBtn').style.display = 'block';  // BaSui: 显示退出登录按钮
+            
+            // BaSui: 默认显示Dashboard，并加载Token使用量数据
+            switchTab('dashboard');
+        })
+        .catch(err => {
+            console.error('自动认证失败:', err);
+            clearExpiredLogin();
+            alert('登录已过期，请重新输入管理员密钥');
+        });
+};
+
+console.log('Tab标签页切换功能已加载 - BaSui');
+
+// ===================== 实时日志功能 (BaSui新增) =====================
+
+// 全局日志变量
+let logEventSource = null;  // SSE连接
+let logEntries = [];         // 日志条目数组
+let logStats = {             // 日志统计
+    total: 0,
+    info: 0,
+    warn: 0,
+    error: 0,
+    debug: 0
+};
+
+/**
+ * 启动/停止实时日志流
+ */
+function toggleLogStream() {
+    if (logEventSource) {
+        // 停止日志流
+        logEventSource.close();
+        logEventSource = null;
+        updateLogStreamStatus(false);
+    } else {
+        // 启动日志流
+        startLogStream();
+    }
+}
+
+/**
+ * 启动SSE日志流
+ */
+function startLogStream() {
+    try {
+        // 获取筛选参数
+        const levels = getSelectedLogLevels();
+        const keyword = document.getElementById('logSearchKeyword').value.trim();
+
+        // 构造SSE URL
+        let url = `/admin/logs/stream?`;
+        if (levels.length > 0 && levels.length < 4) {
+            url += `level=${levels.join(',')}&`;
+        }
+        if (keyword) {
+            url += `keyword=${encodeURIComponent(keyword)}&`;
+        }
+
+        // 创建SSE连接
+        logEventSource = new EventSource(url);
+
+        // 监听消息事件
+        logEventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+
+                // 处理历史日志
+                if (data.type === 'history') {
+                    data.logs.forEach(log => addLogEntry(log, false));
+                    scrollToBottomIfNeeded();
+                } else {
+                    // 实时日志
+                    addLogEntry(data, true);
+                }
+            } catch (error) {
+                console.error('解析SSE消息失败:', error);
+            }
+        };
+
+        // 监听连接打开
+        logEventSource.onopen = () => {
+            console.log('SSE日志流已连接');
+            updateLogStreamStatus(true);
+        };
+
+        // 监听错误
+        logEventSource.onerror = (error) => {
+            console.error('SSE日志流错误:', error);
+            logEventSource.close();
+            logEventSource = null;
+            updateLogStreamStatus(false);
+            alert('日志流连接失败，请检查网络连接或刷新页面重试');
+        };
+
+    } catch (error) {
+        console.error('启动日志流失败:', error);
+        alert('启动日志流失败: ' + error.message);
+    }
+}
+
+/**
+ * 更新日志流状态显示
+ */
+function updateLogStreamStatus(connected) {
+    const statusBadge = document.getElementById('logStreamStatus');
+    const toggleBtn = document.getElementById('logStreamToggle');
+
+    if (connected) {
+        statusBadge.textContent = '已连接';
+        statusBadge.className = 'log-status-badge connected';
+        toggleBtn.textContent = '⏸️ 停止日志';
+        toggleBtn.className = 'btn btn-danger';
+    } else {
+        statusBadge.textContent = '已断开';
+        statusBadge.className = 'log-status-badge disconnected';
+        toggleBtn.textContent = '▶️ 启动实时日志';
+        toggleBtn.className = 'btn btn-primary';
+    }
+}
+
+/**
+ * 添加日志条目
+ */
+function addLogEntry(logEntry, scroll = true) {
+    logEntries.push(logEntry);
+
+    // 更新统计
+    logStats.total++;
+    logStats[logEntry.level] = (logStats[logEntry.level] || 0) + 1;
+    updateLogStatsDisplay();
+
+    // 渲染日志
+    renderLogEntry(logEntry);
+
+    // 自动滚动
+    if (scroll) {
+        scrollToBottomIfNeeded();
+    }
+}
+
+/**
+ * 渲染单条日志
+ */
+function renderLogEntry(logEntry) {
+    const logList = document.getElementById('logList');
+
+    // 移除空提示
+    const emptyMsg = logList.querySelector('.log-empty');
+    if (emptyMsg) {
+        emptyMsg.remove();
+    }
+
+    // 创建日志条目DOM
+    const logDiv = document.createElement('div');
+    logDiv.className = `log-entry log-level-${logEntry.level}`;
+    logDiv.dataset.level = logEntry.level;
+    logDiv.dataset.timestamp = logEntry.timestamp;
+
+    // 日志头部
+    const header = document.createElement('div');
+    header.className = 'log-entry-header';
+
+    // 时间戳
+    const timestamp = document.createElement('span');
+    timestamp.className = 'log-timestamp';
+    timestamp.textContent = formatLogTimestamp(logEntry.timestamp);
+    header.appendChild(timestamp);
+
+    // 级别标签
+    const levelBadge = document.createElement('span');
+    levelBadge.className = `log-level-badge ${logEntry.level}`;
+    levelBadge.textContent = getLevelText(logEntry.level).toUpperCase();
+    header.appendChild(levelBadge);
+
+    // 类型标签
+    if (logEntry.type) {
+        const typeBadge = document.createElement('span');
+        typeBadge.className = 'log-type-badge';
+        typeBadge.textContent = logEntry.type.toUpperCase();
+        header.appendChild(typeBadge);
+    }
+
+    // HTTP方法标签
+    if (logEntry.method) {
+        const methodBadge = document.createElement('span');
+        methodBadge.className = `log-method-badge ${logEntry.method}`;
+        methodBadge.textContent = logEntry.method;
+        header.appendChild(methodBadge);
+    }
+
+    // 状态码标签
+    if (logEntry.statusCode) {
+        const statusBadge = document.createElement('span');
+        const statusClass = getStatusClass(logEntry.statusCode);
+        statusBadge.className = `log-status-badge ${statusClass}`;
+        statusBadge.textContent = logEntry.statusCode;
+        header.appendChild(statusBadge);
+    }
+
+    // 响应时间标签
+    if (logEntry.duration) {
+        const durationSpan = document.createElement('span');
+        durationSpan.className = 'log-timestamp';
+        durationSpan.textContent = `[${logEntry.duration}]`;
+        header.appendChild(durationSpan);
+    }
+
+    logDiv.appendChild(header);
+
+    // 日志内容
+    const content = document.createElement('div');
+    content.className = 'log-entry-content';
+
+    if (logEntry.url) {
+        content.innerHTML += `<span class="log-url">${escapeHtml(logEntry.url)}</span><br>`;
+    }
+
+    if (logEntry.message) {
+        content.innerHTML += `<span class="log-message">${escapeHtml(logEntry.message)}</span><br>`;
+    }
+
+    if (logEntry.body && logEntry.body !== 'null' && logEntry.body !== 'undefined') {
+        const dataDiv = document.createElement('div');
+        dataDiv.className = 'log-data';
+        dataDiv.textContent = logEntry.body;
+        content.appendChild(dataDiv);
+    }
+
+    if (logEntry.error) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'log-data';
+        errorDiv.innerHTML = `<strong>Error:</strong> ${escapeHtml(logEntry.error.message)}<br>${escapeHtml(logEntry.error.stack || '')}`;
+        content.appendChild(errorDiv);
+    }
+
+    logDiv.appendChild(content);
+
+    // 添加到DOM
+    logList.appendChild(logDiv);
+
+    // 限制最大显示条数（防止内存爆炸）
+    const maxLogs = 500;
+    if (logList.children.length > maxLogs) {
+        logList.removeChild(logList.firstChild);
+    }
+}
+
+/**
+ * 更新日志统计显示
+ */
+function updateLogStatsDisplay() {
+    document.getElementById('logStatTotal').textContent = logStats.total;
+    document.getElementById('logStatInfo').textContent = logStats.info || 0;
+    document.getElementById('logStatWarn').textContent = logStats.warn || 0;
+    document.getElementById('logStatError').textContent = logStats.error || 0;
+}
+
+/**
+ * 清空日志显示
+ */
+function clearLogDisplay() {
+    if (!confirm('确认清空所有日志显示？')) return;
+
+    logEntries = [];
+    logStats = { total: 0, info: 0, warn: 0, error: 0, debug: 0 };
+
+    const logList = document.getElementById('logList');
+    logList.innerHTML = '<div class="log-empty">日志已清空</div>';
+
+    updateLogStatsDisplay();
+}
+
+/**
+ * 导出日志为文件
+ */
+function exportLogs() {
+    if (logEntries.length === 0) {
+        alert('没有日志可导出');
+        return;
+    }
+
+    try {
+        // 生成日志文本
+        let logText = `# droid2api 实时日志导出\n`;
+        logText += `# 导出时间: ${new Date().toLocaleString('zh-CN')}\n`;
+        logText += `# 总条数: ${logEntries.length}\n\n`;
+
+        logEntries.forEach(log => {
+            logText += `[${log.timestamp}] [${log.level.toUpperCase()}] [${log.type || 'MESSAGE'}]`;
+            if (log.method) logText += ` ${log.method}`;
+            if (log.url) logText += ` ${log.url}`;
+            if (log.statusCode) logText += ` ${log.statusCode}`;
+            if (log.duration) logText += ` ${log.duration}`;
+            logText += `\n`;
+
+            if (log.message) logText += `  ${log.message}\n`;
+            if (log.body) logText += `  ${log.body}\n`;
+            if (log.error) logText += `  Error: ${log.error.message}\n`;
+            logText += `\n`;
+        });
+
+        // 创建下载
+        const blob = new Blob([logText], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `droid2api_logs_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        alert(`✅ 已导出 ${logEntries.length} 条日志`);
+    } catch (error) {
+        console.error('导出日志失败:', error);
+        alert('导出日志失败: ' + error.message);
+    }
+}
+
+/**
+ * 应用日志筛选
+ */
+function applyLogFilters() {
+    const levels = getSelectedLogLevels();
+    const keyword = document.getElementById('logSearchKeyword').value.trim().toLowerCase();
+
+    const logList = document.getElementById('logList');
+    const logDivs = logList.querySelectorAll('.log-entry');
+
+    logDivs.forEach(logDiv => {
+        const level = logDiv.dataset.level;
+        const text = logDiv.textContent.toLowerCase();
+
+        // 级别筛选
+        const levelMatch = levels.length === 0 || levels.includes(level);
+
+        // 关键词筛选
+        const keywordMatch = !keyword || text.includes(keyword);
+
+        // 显示/隐藏
+        logDiv.style.display = (levelMatch && keywordMatch) ? 'block' : 'none';
+    });
+}
+
+/**
+ * 获取选中的日志级别
+ */
+function getSelectedLogLevels() {
+    const levels = [];
+    if (document.getElementById('filterInfo').checked) levels.push('info');
+    if (document.getElementById('filterWarn').checked) levels.push('warn');
+    if (document.getElementById('filterError').checked) levels.push('error');
+    if (document.getElementById('filterDebug').checked) levels.push('debug');
+    return levels;
+}
+
+/**
+ * 自动滚动到底部（如果开启）
+ */
+function scrollToBottomIfNeeded() {
+    if (document.getElementById('logAutoScroll').checked) {
+        const logContainer = document.querySelector('.log-display-container');
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+}
+
+/**
+ * 格式化日志时间戳
+ */
+function formatLogTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    const ms = String(date.getMilliseconds()).padStart(3, '0');
+    return `${hours}:${minutes}:${seconds}.${ms}`;
+}
+
+/**
+ * 获取级别文本
+ */
+function getLevelText(level) {
+    const map = {
+        'info': 'info',
+        'warn': 'warn',
+        'error': 'error',
+        'debug': 'debug'
+    };
+    return map[level] || level;
+}
+
+/**
+ * 获取状态码样式类
+ */
+function getStatusClass(statusCode) {
+    if (statusCode >= 500) return 'status-5xx';
+    if (statusCode >= 400) return 'status-4xx';
+    if (statusCode >= 300) return 'status-3xx';
+    if (statusCode >= 200) return 'status-2xx';
+    return '';
+}
+
+// 页面卸载时关闭SSE连接
+window.addEventListener('beforeunload', () => {
+    if (logEventSource) {
+        logEventSource.close();
+    }
+});
+
+console.log('✅ 实时日志功能已加载 - BaSui');
+
+// ============================================
+// BaSui：修改密钥池功能（快速修改单个密钥的池）
+// ============================================
+// 🆕 注意：此功能已移至 pool-groups.js 实现，避免重复声明！
+// - let currentChangePoolKeyId (已在 pool-groups.js:5 声明)
+// - function showChangePoolModal (已在 pool-groups.js:273 实现)
+// - async function changeKeyPool (已在 pool-groups.js:283 实现)
+
