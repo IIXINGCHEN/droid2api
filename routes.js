@@ -527,7 +527,7 @@ async function handleCountTokens(req, res) {
 
   try {
     const anthropicRequest = req.body;
-    const modelId = anthropicRequest.model;
+    const modelId = getRedirectedModelId(anthropicRequest.model);
 
     if (!modelId) {
       return res.status(400).json({ error: 'model is required' });
@@ -572,13 +572,16 @@ async function handleCountTokens(req, res) {
     // 构建 count_tokens 端点 URL
     const countTokensUrl = endpoint.base_url.replace('/v1/messages', '/v1/messages/count_tokens');
 
+    // 更新请求体中的模型ID为重定向后的ID
+    const modifiedRequest = { ...anthropicRequest, model: modelId };
+
     logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
-    logRequest('POST', countTokensUrl, headers, anthropicRequest);
+    logRequest('POST', countTokensUrl, headers, modifiedRequest);
 
     const response = await fetch(countTokensUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify(anthropicRequest)
+      body: JSON.stringify(modifiedRequest)
     });
 
     logInfo(`Response status: ${response.status}`);
