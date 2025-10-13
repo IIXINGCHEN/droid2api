@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { logInfo } from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,4 +82,15 @@ export function getRemoveOn402() {
   const cfg = getConfig();
   // 默认值为true
   return cfg.remove_on_402 !== false;
+}
+
+export function getRedirectedModelId(modelId) {
+  const cfg = getConfig();
+  if (cfg.model_redirects && cfg.model_redirects[modelId]) {
+    const redirectedId = cfg.model_redirects[modelId];
+    console.log(`[REDIRECT] Model redirected: ${modelId} -> ${redirectedId}`);
+    logInfo(`Model redirected: ${modelId} -> ${redirectedId}`);
+    return redirectedId;
+  }
+  return modelId;
 }

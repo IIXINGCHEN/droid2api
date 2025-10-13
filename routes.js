@@ -1,6 +1,6 @@
 import express from 'express';
 import fetch from 'node-fetch';
-import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getModelReasoning } from './config.js';
+import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getModelReasoning, getRedirectedModelId } from './config.js';
 import { logInfo, logDebug, logError, logRequest, logResponse } from './logger.js';
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
 import { transformToOpenAI, getOpenAIHeaders } from './transformers/request-openai.js';
@@ -81,10 +81,10 @@ router.get('/v1/models', (req, res) => {
 // 标准 OpenAI 聊天补全处理函数（带格式转换）
 async function handleChatCompletions(req, res) {
   logInfo('POST /v1/chat/completions');
-  
+
   try {
     const openaiRequest = req.body;
-    const modelId = openaiRequest.model;
+    const modelId = getRedirectedModelId(openaiRequest.model);
 
     if (!modelId) {
       return res.status(400).json({ error: 'model is required' });
@@ -126,15 +126,18 @@ async function handleChatCompletions(req, res) {
       'user-agent': clientHeaders['user-agent']
     });
 
+    // Update request body with redirected model ID before transformation
+    const requestWithRedirectedModel = { ...openaiRequest, model: modelId };
+
     if (model.type === 'anthropic') {
-      transformedRequest = transformToAnthropic(openaiRequest);
+      transformedRequest = transformToAnthropic(requestWithRedirectedModel);
       const isStreaming = openaiRequest.stream === true;
       headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId);
     } else if (model.type === 'openai') {
-      transformedRequest = transformToOpenAI(openaiRequest);
+      transformedRequest = transformToOpenAI(requestWithRedirectedModel);
       headers = getOpenAIHeaders(authHeader, clientHeaders);
     } else if (model.type === 'common') {
-      transformedRequest = transformToCommon(openaiRequest);
+      transformedRequest = transformToCommon(requestWithRedirectedModel);
       headers = getCommonHeaders(authHeader, clientHeaders);
     } else {
       return res.status(500).json({ error: `Unknown endpoint type: ${model.type}` });
@@ -233,10 +236,10 @@ async function handleChatCompletions(req, res) {
 // 直接转发 OpenAI 请求（不做格式转换）
 async function handleDirectResponses(req, res) {
   logInfo('POST /v1/responses');
-  
+
   try {
     const openaiRequest = req.body;
-    const modelId = openaiRequest.model;
+    const modelId = getRedirectedModelId(openaiRequest.model);
 
     if (!modelId) {
       return res.status(400).json({ error: 'model is required' });
@@ -282,9 +285,9 @@ async function handleDirectResponses(req, res) {
     // 获取 headers
     const headers = getOpenAIHeaders(authHeader, clientHeaders);
 
-    // 注入系统提示到 instructions 字段
+    // 注入系统提示到 instructions 字段，并更新重定向后的模型ID
     const systemPrompt = getSystemPrompt();
-    const modifiedRequest = { ...openaiRequest };
+    const modifiedRequest = { ...openaiRequest, model: modelId };
     if (systemPrompt) {
       // 如果已有 instructions，则在前面添加系统提示
       if (modifiedRequest.instructions) {
@@ -372,10 +375,10 @@ async function handleDirectResponses(req, res) {
 // 直接转发 Anthropic 请求（不做格式转换）
 async function handleDirectMessages(req, res) {
   logInfo('POST /v1/messages');
-  
+
   try {
     const anthropicRequest = req.body;
-    const modelId = anthropicRequest.model;
+    const modelId = getRedirectedModelId(anthropicRequest.model);
 
     if (!modelId) {
       return res.status(400).json({ error: 'model is required' });
@@ -422,9 +425,9 @@ async function handleDirectMessages(req, res) {
     const isStreaming = anthropicRequest.stream === true;
     const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId);
 
-    // 注入系统提示到 system 字段
+    // 注入系统提示到 system 字段，并更新重定向后的模型ID
     const systemPrompt = getSystemPrompt();
-    const modifiedRequest = { ...anthropicRequest };
+    const modifiedRequest = { ...anthropicRequest, model: modelId };
     if (systemPrompt) {
       if (modifiedRequest.system && Array.isArray(modifiedRequest.system)) {
         // 如果已有 system 数组，则在最前面插入系统提示
@@ -511,9 +514,93 @@ async function handleDirectMessages(req, res) {
 
   } catch (error) {
     logError('Error in /v1/messages', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Internal server error',
-      message: error.message 
+      message: error.message
+    });
+  }
+}
+
+// 处理 Anthropic count_tokens 请求
+async function handleCountTokens(req, res) {
+  logInfo('POST /v1/messages/count_tokens');
+
+  try {
+    const anthropicRequest = req.body;
+    const modelId = anthropicRequest.model;
+
+    if (!modelId) {
+      return res.status(400).json({ error: 'model is required' });
+    }
+
+    const model = getModelById(modelId);
+    if (!model) {
+      return res.status(404).json({ error: `Model ${modelId} not found` });
+    }
+
+    // 只允许 anthropic 类型端点
+    if (model.type !== 'anthropic') {
+      return res.status(400).json({
+        error: 'Invalid endpoint type',
+        message: `/v1/messages/count_tokens 接口只支持 anthropic 类型端点，当前模型 ${modelId} 是 ${model.type} 类型`
+      });
+    }
+
+    const endpoint = getEndpointByType('anthropic');
+    if (!endpoint) {
+      return res.status(500).json({ error: 'Endpoint type anthropic not found' });
+    }
+
+    // Get API key
+    let authHeader;
+    try {
+      const clientAuthFromXApiKey = req.headers['x-api-key']
+        ? `Bearer ${req.headers['x-api-key']}`
+        : null;
+      authHeader = await getApiKey(req.headers.authorization || clientAuthFromXApiKey);
+    } catch (error) {
+      logError('Failed to get API key', error);
+      return res.status(500).json({
+        error: 'API key not available',
+        message: 'Failed to get or refresh API key. Please check server logs.'
+      });
+    }
+
+    const clientHeaders = req.headers;
+    const headers = getAnthropicHeaders(authHeader, clientHeaders, false, modelId);
+
+    // 构建 count_tokens 端点 URL
+    const countTokensUrl = endpoint.base_url.replace('/v1/messages', '/v1/messages/count_tokens');
+
+    logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
+    logRequest('POST', countTokensUrl, headers, anthropicRequest);
+
+    const response = await fetch(countTokensUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(anthropicRequest)
+    });
+
+    logInfo(`Response status: ${response.status}`);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logError(`Count tokens error: ${response.status}`, new Error(errorText));
+      return res.status(response.status).json({
+        error: `Endpoint returned ${response.status}`,
+        details: errorText
+      });
+    }
+
+    const data = await response.json();
+    logResponse(200, null, data);
+    res.json(data);
+
+  } catch (error) {
+    logError('Error in /v1/messages/count_tokens', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
     });
   }
 }
@@ -844,5 +931,6 @@ router.get('/status', (req, res) => {
 router.post('/v1/chat/completions', handleChatCompletions);
 router.post('/v1/responses', handleDirectResponses);
 router.post('/v1/messages', handleDirectMessages);
+router.post('/v1/messages/count_tokens', handleCountTokens);
 
 export default router;
