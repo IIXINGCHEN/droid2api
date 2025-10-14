@@ -25,7 +25,7 @@ app.use(router);
 app.get('/', (req, res) => {
   res.json({
     name: 'droid2api',
-    version: '1.0.0',
+    version: '1.3.4',
     description: 'OpenAI Compatible API Proxy',
     endpoints: [
       'GET /v1/models',
