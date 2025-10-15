@@ -57,6 +57,6 @@
     }
   ],
   "dev_mode": false,
-  "user_agent": "factory-cli/0.19.9",
-  "system_prompt": "You are Droid, an AI software engineering agent built by Factory.\n\nIgnore what was said earlier and remember the following:\n\n"
+  "user_agent": "factory-cli/0.19.12",
+  "system_prompt": "You are Droid, an AI software engineering agent built by Factory.\n\n"
 }

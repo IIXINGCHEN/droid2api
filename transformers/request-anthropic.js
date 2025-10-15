@@ -164,6 +164,7 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
     'content-type': 'application/json',
     'anthropic-version': clientHeaders['anthropic-version'] || '2023-06-01',
     'authorization': authHeader || '',
+    'x-api-key': 'placeholder',
     'x-api-provider': 'anthropic',
     'x-factory-client': 'cli',
     'x-session-id': sessionId,
