@@ -19,6 +19,7 @@
       "base_url": "https://app.factory.ai/api/llm/o/v1/chat/completions"
     }
   ],
+  "proxies": [],
   "models": [
     {
       "name": "Opus 4.1",
@@ -57,6 +58,6 @@
     }
   ],
   "dev_mode": false,
-  "user_agent": "factory-cli/0.20.0",
+  "user_agent": "factory-cli/0.22.2",
   "system_prompt": "You are Droid, an AI software engineering agent built by Factory.\n\n"
 }

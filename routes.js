@@ -8,6 +8,7 @@ import { transformToCommon, getCommonHeaders } from './transformers/request-comm
 import { AnthropicResponseTransformer } from './transformers/response-anthropic.js';
 import { OpenAIResponseTransformer } from './transformers/response-openai.js';
 import { getApiKey } from './auth.js';
+import { getNextProxyAgent } from './proxy-manager.js';
 
 const router = express.Router();
 
@@ -144,11 +145,18 @@ async function handleChatCompletions(req, res) {
 
     logRequest('POST', endpoint.base_url, headers, transformedRequest);
 
-    const response = await fetch(endpoint.base_url, {
+    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(transformedRequest)
-    });
+    };
+
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 
@@ -311,11 +319,18 @@ async function handleDirectResponses(req, res) {
     logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
     // 转发修改后的请求
-    const response = await fetch(endpoint.base_url, {
+    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
-    });
+    };
+
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 
@@ -458,11 +473,18 @@ async function handleDirectMessages(req, res) {
     logRequest('POST', endpoint.base_url, headers, modifiedRequest);
 
     // 转发修改后的请求
-    const response = await fetch(endpoint.base_url, {
+    const proxyAgentInfo = getNextProxyAgent(endpoint.base_url);
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
-    });
+    };
+
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
+    const response = await fetch(endpoint.base_url, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 
@@ -565,11 +587,18 @@ async function handleCountTokens(req, res) {
     logInfo(`Forwarding to count_tokens endpoint: ${countTokensUrl}`);
     logRequest('POST', countTokensUrl, headers, modifiedRequest);
 
-    const response = await fetch(countTokensUrl, {
+    const proxyAgentInfo = getNextProxyAgent(countTokensUrl);
+    const fetchOptions = {
       method: 'POST',
       headers,
       body: JSON.stringify(modifiedRequest)
-    });
+    };
+
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
+    const response = await fetch(countTokensUrl, fetchOptions);
 
     logInfo(`Response status: ${response.status}`);
 

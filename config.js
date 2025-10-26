@@ -68,6 +68,14 @@ export function getUserAgent() {
   return cfg.user_agent || 'factory-cli/0.19.3';
 }
 
+export function getProxyConfigs() {
+  const cfg = getConfig();
+  if (!Array.isArray(cfg.proxies)) {
+    return [];
+  }
+  return cfg.proxies.filter(proxy => proxy && typeof proxy === 'object');
+}
+
 export function getRedirectedModelId(modelId) {
   const cfg = getConfig();
   if (cfg.model_redirects && cfg.model_redirects[modelId]) {

@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import fetch from 'node-fetch';
 import { logDebug, logError, logInfo } from './logger.js';
+import { getNextProxyAgent } from './proxy-manager.js';
 
 // State management for API key and refresh
 let currentApiKey = null;
@@ -134,13 +135,20 @@ async function refreshApiKey() {
     formData.append('refresh_token', currentRefreshToken);
     formData.append('client_id', clientId);
 
-    const response = await fetch(REFRESH_URL, {
+    const proxyAgentInfo = getNextProxyAgent(REFRESH_URL);
+    const fetchOptions = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded'
       },
       body: formData.toString()
-    });
+    };
+
+    if (proxyAgentInfo?.agent) {
+      fetchOptions.agent = proxyAgentInfo.agent;
+    }
+
+    const response = await fetch(REFRESH_URL, fetchOptions);
 
     if (!response.ok) {
       const errorText = await response.text();
