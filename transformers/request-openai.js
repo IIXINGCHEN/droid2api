@@ -141,7 +141,7 @@ export function getOpenAIHeaders(authHeader, clientHeaders = {}) {
   const headers = {
     'content-type': 'application/json',
     'authorization': authHeader || '',
-    'x-api-provider': 'azure_openai',
+    'x-api-provider': 'openai',
     'x-factory-client': 'cli',
     'x-session-id': sessionId,
     'x-assistant-message-id': messageId,

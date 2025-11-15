@@ -1,6 +1,6 @@
 {
   "name": "droid2api",
-  "version": "1.3.5",
+  "version": "1.3.6",
   "description": "OpenAI Compatible API Proxy",
   "main": "server.js",
   "type": "module",
