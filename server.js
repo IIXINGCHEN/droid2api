@@ -3,6 +3,7 @@ import { loadConfig, isDevMode, getPort } from './config.js';
 import { logInfo, logError } from './logger.js';
 import router from './routes.js';
 import { initializeAuth } from './auth.js';
+import { initializeUserAgentUpdater } from './user-agent-updater.js';
 
 const app = express();
 
@@ -111,6 +112,9 @@ app.use((err, req, res, next) => {
     loadConfig();
     logInfo('Configuration loaded successfully');
     logInfo(`Dev mode: ${isDevMode()}`);
+    
+    // Initialize User-Agent version updater
+    initializeUserAgentUpdater();
     
     // Initialize auth system (load and setup API key if needed)
     // This won't throw error if no auth config is found - will use client auth

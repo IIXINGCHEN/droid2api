@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { logInfo } from './logger.js';
+import { getCurrentUserAgent } from './user-agent-updater.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,8 +65,7 @@ export function getModelReasoning(modelId) {
 }
 
 export function getUserAgent() {
-  const cfg = getConfig();
-  return cfg.user_agent || 'factory-cli/0.19.3';
+  return getCurrentUserAgent();
 }
 
 export function getProxyConfigs() {
