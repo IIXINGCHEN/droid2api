@@ -1,5 +1,5 @@
 import { logDebug } from '../logger.js';
-import { getSystemPrompt, getUserAgent } from '../config.js';
+import { getSystemPrompt, getUserAgent, getModelReasoning } from '../config.js';
 
 export function transformToCommon(openaiRequest) {
   logDebug('Transforming OpenAI request to Common format');
@@ -39,11 +39,25 @@ export function transformToCommon(openaiRequest) {
     }
   }
 
+  // Handle reasoning_effort field based on model configuration
+  const reasoningLevel = getModelReasoning(openaiRequest.model);
+  if (reasoningLevel === 'auto') {
+    // Auto mode: preserve original request's reasoning_effort field exactly as-is
+    // If original request has reasoning_effort field, keep it; otherwise don't add one
+  } else if (reasoningLevel && ['low', 'medium', 'high'].includes(reasoningLevel)) {
+    // Specific level: override with model configuration
+    commonRequest.reasoning_effort = reasoningLevel;
+  } else {
+    // Off or invalid: explicitly remove reasoning_effort field
+    // This ensures any reasoning_effort field from the original request is deleted
+    delete commonRequest.reasoning_effort;
+  }
+
   logDebug('Transformed Common request', commonRequest);
   return commonRequest;
 }
 
-export function getCommonHeaders(authHeader, clientHeaders = {}) {
+export function getCommonHeaders(authHeader, clientHeaders = {}, provider = 'baseten') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
   const messageId = clientHeaders['x-assistant-message-id'] || generateUUID();
@@ -52,7 +66,7 @@ export function getCommonHeaders(authHeader, clientHeaders = {}) {
     'accept': 'application/json',
     'content-type': 'application/json',
     'authorization': authHeader || '',
-    'x-api-provider': 'baseten',
+    'x-api-provider': provider,
     'x-factory-client': 'cli',
     'x-session-id': sessionId,
     'x-assistant-message-id': messageId,

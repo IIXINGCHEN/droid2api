@@ -1,6 +1,6 @@
 import express from 'express';
 import fetch from 'node-fetch';
-import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getModelReasoning, getRedirectedModelId } from './config.js';
+import { getConfig, getModelById, getEndpointByType, getSystemPrompt, getModelReasoning, getRedirectedModelId, getModelProvider } from './config.js';
 import { logInfo, logDebug, logError, logRequest, logResponse } from './logger.js';
 import { transformToAnthropic, getAnthropicHeaders } from './transformers/request-anthropic.js';
 import { transformToOpenAI, getOpenAIHeaders } from './transformers/request-openai.js';
@@ -129,16 +129,19 @@ async function handleChatCompletions(req, res) {
     // Update request body with redirected model ID before transformation
     const requestWithRedirectedModel = { ...openaiRequest, model: modelId };
 
+    // Get provider from model config
+    const provider = getModelProvider(modelId);
+
     if (model.type === 'anthropic') {
       transformedRequest = transformToAnthropic(requestWithRedirectedModel);
       const isStreaming = openaiRequest.stream === true;
-      headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId);
+      headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId, provider);
     } else if (model.type === 'openai') {
       transformedRequest = transformToOpenAI(requestWithRedirectedModel);
-      headers = getOpenAIHeaders(authHeader, clientHeaders);
+      headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
     } else if (model.type === 'common') {
       transformedRequest = transformToCommon(requestWithRedirectedModel);
-      headers = getCommonHeaders(authHeader, clientHeaders);
+      headers = getCommonHeaders(authHeader, clientHeaders, provider);
     } else {
       return res.status(500).json({ error: `Unknown endpoint type: ${model.type}` });
     }
@@ -285,8 +288,11 @@ async function handleDirectResponses(req, res) {
 
     const clientHeaders = req.headers;
     
+    // Get provider from model config
+    const provider = getModelProvider(modelId);
+    
     // 获取 headers
-    const headers = getOpenAIHeaders(authHeader, clientHeaders);
+    const headers = getOpenAIHeaders(authHeader, clientHeaders, provider);
 
     // 注入系统提示到 instructions 字段，并更新重定向后的模型ID
     const systemPrompt = getSystemPrompt();
@@ -427,9 +433,12 @@ async function handleDirectMessages(req, res) {
 
     const clientHeaders = req.headers;
     
+    // Get provider from model config
+    const provider = getModelProvider(modelId);
+    
     // 获取 headers
     const isStreaming = anthropicRequest.stream === true;
-    const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId);
+    const headers = getAnthropicHeaders(authHeader, clientHeaders, isStreaming, modelId, provider);
 
     // 注入系统提示到 system 字段，并更新重定向后的模型ID
     const systemPrompt = getSystemPrompt();
@@ -576,7 +585,11 @@ async function handleCountTokens(req, res) {
     }
 
     const clientHeaders = req.headers;
-    const headers = getAnthropicHeaders(authHeader, clientHeaders, false, modelId);
+    
+    // Get provider from model config
+    const provider = getModelProvider(modelId);
+    
+    const headers = getAnthropicHeaders(authHeader, clientHeaders, false, modelId, provider);
 
     // 构建 count_tokens 端点 URL
     const countTokensUrl = endpoint.base_url.replace('/v1/messages', '/v1/messages/count_tokens');

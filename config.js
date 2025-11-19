@@ -64,6 +64,11 @@ export function getModelReasoning(modelId) {
   return null;
 }
 
+export function getModelProvider(modelId) {
+  const model = getModelById(modelId);
+  return model?.provider || null;
+}
+
 export function getUserAgent() {
   return getCurrentUserAgent();
 }

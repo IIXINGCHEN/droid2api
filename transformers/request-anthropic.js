@@ -154,7 +154,7 @@ export function transformToAnthropic(openaiRequest) {
   return anthropicRequest;
 }
 
-export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null) {
+export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming = true, modelId = null, provider = 'anthropic') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
   const messageId = clientHeaders['x-assistant-message-id'] || generateUUID();
@@ -165,7 +165,7 @@ export function getAnthropicHeaders(authHeader, clientHeaders = {}, isStreaming 
     'anthropic-version': clientHeaders['anthropic-version'] || '2023-06-01',
     'authorization': authHeader || '',
     'x-api-key': 'placeholder',
-    'x-api-provider': 'anthropic',
+    'x-api-provider': provider,
     'x-factory-client': 'cli',
     'x-session-id': sessionId,
     'x-assistant-message-id': messageId,

@@ -133,7 +133,7 @@ export function transformToOpenAI(openaiRequest) {
   return targetRequest;
 }
 
-export function getOpenAIHeaders(authHeader, clientHeaders = {}) {
+export function getOpenAIHeaders(authHeader, clientHeaders = {}, provider = 'openai') {
   // Generate unique IDs if not provided
   const sessionId = clientHeaders['x-session-id'] || generateUUID();
   const messageId = clientHeaders['x-assistant-message-id'] || generateUUID();
@@ -141,7 +141,7 @@ export function getOpenAIHeaders(authHeader, clientHeaders = {}) {
   const headers = {
     'content-type': 'application/json',
     'authorization': authHeader || '',
-    'x-api-provider': 'openai',
+    'x-api-provider': provider,
     'x-factory-client': 'cli',
     'x-session-id': sessionId,
     'x-assistant-message-id': messageId,
